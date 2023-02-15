@@ -3,5 +3,5 @@ Advanced rendering with Vulkan API
 
 <br />
 
-This project how to use vertex shader, geometry shader and fragment shader to render some graphics with Vulkan API.
+This project demonstrates how to use a vertex shader, a geometry shader and a fragment shader to render some graphics with Vulkan API.
 
