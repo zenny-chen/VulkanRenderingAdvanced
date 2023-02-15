@@ -16,7 +16,7 @@ void main(void)
 {
     const vec4 srcInPos = gl_in[0].gl_Position;
     const lowp vec4 dstColor = gsIn[0].fragColor;
-    const float pointSize = 16.0f;
+    const float pointSize = 1.0f;
     const float halfWidth = edgeWidth * 0.5f;
 
     // bottom-left
