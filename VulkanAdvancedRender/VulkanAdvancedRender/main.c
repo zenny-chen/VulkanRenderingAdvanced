@@ -121,6 +121,7 @@ static VkSemaphore s_imageOwnershipSemaphores[FRAME_LAG] = { VK_NULL_HANDLE };
 static VkCommandPool s_commandPool = VK_NULL_HANDLE;
 static VkCommandPool s_presentCommandPool = VK_NULL_HANDLE;
 static VkCommandBuffer s_commandBuffers[1] = { VK_NULL_HANDLE };
+static VkQueryPool s_queryPool = VK_NULL_HANDLE;
 static VkBuffer s_hostVertexAndUniformBuffer = VK_NULL_HANDLE;
 static VkDeviceMemory s_hostVertexUniformMemory = VK_NULL_HANDLE;
 static VkDescriptorSetLayout s_descSetLayout = VK_NULL_HANDLE;
@@ -134,6 +135,8 @@ static VkPipeline s_pipelines[8] = { VK_NULL_HANDLE };
 static VkDescriptorPool s_descPool = VK_NULL_HANDLE;
 static bool s_isRenderPrepared = false;
 static float s_currRorationDegree = 0.0f;
+static float s_gpuTimestampPeriod = 0.0f;
+static double s_currGPUDuration = 0.0;
 
 struct
 {
@@ -523,6 +526,8 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
     // Query all above properties
     vkGetPhysicalDeviceProperties2(s_currPhysicalDevice, &properties2);
     printf("Detail driver info: %s %s\n", driverProps.driverName, driverProps.driverInfo);
+
+    s_gpuTimestampPeriod = properties2.properties.limits.timestampPeriod;
 
     // ==== The following is query the specific extension features in the feature chaining form ====
     VkPhysicalDeviceScalarBlockLayoutFeatures scalarBlockLayoutFeature = {
@@ -1159,6 +1164,23 @@ static bool CreateCommandBufferAndBeginCommand(void)
                 return false;
             }
         }
+    }
+
+    // Create the query pool
+    const VkQueryPoolCreateInfo queryPoolCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .queryType = VK_QUERY_TYPE_TIMESTAMP,
+        .queryCount = 2 * s_swapchainImageCount,
+        .pipelineStatistics = 0U
+    };
+
+    res = vkCreateQueryPool(s_specDevice, &queryPoolCreateInfo, NULL, &s_queryPool);
+    if (res != VK_SUCCESS)
+    {
+        printf("vkCreateQueryPool failed: %d\n", res);
+        return false;
     }
 
     const VkCommandBufferBeginInfo cmdBufBeginInfo = {
@@ -2110,7 +2132,7 @@ static bool CreateFramebuffers(void)
     return true;
 }
 
-static bool BuildCommandForDraw(VkCommandBuffer inputCmdBuf, uint32_t swapchainIndex)
+static bool RecordCommandsForDraw(VkCommandBuffer inputCmdBuf, uint32_t swapchainIndex)
 {
     const VkCommandBufferBeginInfo cmd_buf_info = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -2121,9 +2143,13 @@ static bool BuildCommandForDraw(VkCommandBuffer inputCmdBuf, uint32_t swapchainI
     VkResult res = vkBeginCommandBuffer(inputCmdBuf, &cmd_buf_info);
     if (res != VK_SUCCESS)
     {
-        printf("vkBeginCommandBuffer in BuildCommandForDraw @%u failed: %d\n", swapchainIndex, res);
+        printf("vkBeginCommandBuffer in RecordCommandsForDraw @%u failed: %d\n", swapchainIndex, res);
         return false;
     }
+
+    // Begin the timestamp query
+    vkCmdResetQueryPool(inputCmdBuf, s_queryPool, swapchainIndex * 2, 1);
+    vkCmdWriteTimestamp(inputCmdBuf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, s_queryPool, swapchainIndex * 2);
 
     const VkClearValue clearValues[] = {
         { .color.float32 = { 0.4f, 0.5f, 0.4f, 1.0f } },
@@ -2241,10 +2267,14 @@ static bool BuildCommandForDraw(VkCommandBuffer inputCmdBuf, uint32_t swapchainI
     vkCmdPipelineBarrier(inputCmdBuf, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0,
         0, NULL, 1, &copyBarrier, 0, NULL);
 
+    // End the query timestamp
+    vkCmdResetQueryPool(inputCmdBuf, s_queryPool, swapchainIndex * 2 + 1, 1);
+    vkCmdWriteTimestamp(inputCmdBuf, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s_queryPool, swapchainIndex * 2 + 1);
+
     res = vkEndCommandBuffer(inputCmdBuf);
     if (res != VK_SUCCESS)
     {
-        printf("vkEndCommandBuffer for BuildCommandForDraw failed: %d\n", res);
+        printf("vkEndCommandBuffer for RecordCommandsForDraw failed: %d\n", res);
         return false;
     }
 
@@ -2339,6 +2369,8 @@ static bool UpdateUniformData(int currImageIndex)
     return true;
 }
 
+static size_t s_drawCount = 0;
+
 static void DoResize(void)
 {
 
@@ -2392,16 +2424,17 @@ static void DrawObjects(HINSTANCE hInstance, HWND hWnd, int currFrameIndex)
     // engine has fully released ownership to the application, and it is
     // okay to render to the image.
     const VkPipelineStageFlags pipelineStageFlags[1] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-    VkSubmitInfo submit_info;
-    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submit_info.pNext = NULL;
-    submit_info.waitSemaphoreCount = 1;
-    submit_info.pWaitSemaphores = &s_imageAcquiredSemaphores[currFrameIndex];
-    submit_info.pWaitDstStageMask = pipelineStageFlags;
-    submit_info.commandBufferCount = 1;
-    submit_info.pCommandBuffers = &s_swapchainImageResources[currImageIndex].cmd_buf;
-    submit_info.signalSemaphoreCount = 1;
-    submit_info.pSignalSemaphores = &s_drawCompleteSemaphores[currFrameIndex];
+    const VkSubmitInfo submit_info = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .pNext = NULL,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &s_imageAcquiredSemaphores[currFrameIndex],
+        .pWaitDstStageMask = pipelineStageFlags,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &s_swapchainImageResources[currImageIndex].cmd_buf,
+        .signalSemaphoreCount = 1,
+        .pSignalSemaphores = &s_drawCompleteSemaphores[currFrameIndex]
+    };
     res = vkQueueSubmit(s_graphicsQueue, 1, &submit_info, s_presentFences[currFrameIndex]);
     if (res != VK_SUCCESS)
     {
@@ -2415,13 +2448,18 @@ static void DrawObjects(HINSTANCE hInstance, HWND hWnd, int currFrameIndex)
         // If we are using separate queues, change image ownership to the
         // present queue before presenting, waiting for the draw complete
         // semaphore and signalling the ownership released semaphore when finished
-        submit_info.waitSemaphoreCount = 1;
-        submit_info.pWaitSemaphores = &s_drawCompleteSemaphores[currFrameIndex];
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &s_swapchainImageResources[currImageIndex].graphics_to_present_cmd_buf;
-        submit_info.signalSemaphoreCount = 1;
-        submit_info.pSignalSemaphores = &s_imageOwnershipSemaphores[currFrameIndex];
-        res = vkQueueSubmit(s_presentQueue, 1, &submit_info, VK_NULL_HANDLE);
+        const VkSubmitInfo presentSubmitInfo = {
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = NULL,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &s_drawCompleteSemaphores[currFrameIndex],
+            .pWaitDstStageMask = pipelineStageFlags,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &s_swapchainImageResources[currImageIndex].graphics_to_present_cmd_buf,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = &s_imageOwnershipSemaphores[currFrameIndex]
+        };
+        res = vkQueueSubmit(s_presentQueue, 1, &presentSubmitInfo, VK_NULL_HANDLE);
         if (res != VK_SUCCESS)
         {
             printf("vkQueueSubmit for presentation failed: %d\n", res);
@@ -2497,6 +2535,23 @@ static void DrawObjects(HINSTANCE hInstance, HWND hWnd, int currFrameIndex)
         printf("vkQueuePresentKHR failed: %d\n", res);
         break;
     }
+
+    // Fetch the query result
+    uint64_t timestamps[MAX_SWAPCHAIN_IMAGE_COUNT * 2] = { 0 };
+    res = vkGetQueryPoolResults(s_specDevice, s_queryPool, 0, 2 * s_swapchainImageCount, sizeof(timestamps), timestamps, sizeof(timestamps[0]), VK_QUERY_RESULT_64_BIT);
+    if (res == VK_SUCCESS)
+    {
+        uint64_t sumDuration = 0;
+        for (uint32_t i = 0; i < s_swapchainImageCount; ++i) {
+            sumDuration += timestamps[i * 2 + 1] - timestamps[i * 2];
+        }
+        s_currGPUDuration = (double)sumDuration * (double)s_gpuTimestampPeriod / 1000'000.0;
+    }
+    else if(res == VK_NOT_READY){
+        puts("vkGetQueryPoolResults: query not ready...");
+    }
+
+    ++s_drawCount;
 }
 
 static void RunTheRendering(HINSTANCE hInstance, HWND hWnd, int currFrameIndex)
@@ -2602,6 +2657,9 @@ static void DestroyVulkanAssets(void)
     if (s_depthResource.device_memory != VK_NULL_HANDLE) {
         vkFreeMemory(s_specDevice, s_depthResource.device_memory, NULL);
     }
+    if (s_queryPool != VK_NULL_HANDLE) {
+        vkDestroyQueryPool(s_specDevice, s_queryPool, NULL);
+    }
     if (s_commandPool != VK_NULL_HANDLE)
     {
         if (s_commandBuffers[0] != VK_NULL_HANDLE) {
@@ -2635,6 +2693,7 @@ static void DestroyVulkanAssets(void)
 
 static int s_currFrameIndex = 0;
 static POINT s_wndMinsize;                // minimum window size
+static const char s_appName[] = "Vulkan Simple Render";
 
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -2656,6 +2715,12 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         RunTheRendering(GetModuleHandleA(NULL), hWnd, s_currFrameIndex++);
         if (s_currFrameIndex == FRAME_LAG) {
             s_currFrameIndex = 0;
+        }
+        if (s_drawCount % 60 == 0)
+        {
+            char buffer[64];
+            sprintf_s(buffer, sizeof(buffer), "%s -- GPU usage duration: %.2f ms", s_appName, s_currGPUDuration);
+            SetWindowTextA(hWnd, buffer);
         }
         break;
 
@@ -2757,9 +2822,7 @@ static HWND CreateAndInitializeWindow(HINSTANCE hInstance, LPCSTR appName, int w
 
 int main(int argc, const char* const argv[])
 {
-    const char* const appName = "Vulkan Simple Render";
-
-    if (!InitializeVulkanInstance(appName, "ZennyEngine")) {
+    if (!InitializeVulkanInstance(s_appName, "ZennyEngine")) {
         return 0;
     }
 
@@ -2771,7 +2834,7 @@ int main(int argc, const char* const argv[])
     HINSTANCE wndInstance = GetModuleHandleA(NULL);
 
     // window handle
-    HWND wndHandle = CreateAndInitializeWindow(wndInstance, appName, WINDOW_WIDTH, WINDOW_HEIGHT);
+    HWND wndHandle = CreateAndInitializeWindow(wndInstance, s_appName, WINDOW_WIDTH, WINDOW_HEIGHT);
 
     s_render_width = WINDOW_WIDTH;
     s_render_height = WINDOW_HEIGHT;
@@ -2798,7 +2861,7 @@ int main(int argc, const char* const argv[])
         
         for (uint32_t i = 0; i < s_swapchainImageCount; ++i)
         {
-            if (!BuildCommandForDraw(s_swapchainImageResources[i].cmd_buf, i)) {
+            if (!RecordCommandsForDraw(s_swapchainImageResources[i].cmd_buf, i)) {
                 break;
             }
         }
