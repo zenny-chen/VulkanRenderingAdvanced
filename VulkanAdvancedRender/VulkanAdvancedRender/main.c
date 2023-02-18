@@ -61,8 +61,8 @@ enum MY_CONSTANTS
     MAX_SWAPCHAIN_IMAGE_COUNT = 16,
     DYNAMIC_STATE_COUNT = 2,
 
-    WINDOW_WIDTH = 512,
-    WINDOW_HEIGHT = 512,
+    WINDOW_WIDTH = 640,
+    WINDOW_HEIGHT = 640,
     FRAME_LAG = 2,
 
     s_depth_format = VK_FORMAT_D16_UNORM
@@ -90,7 +90,6 @@ typedef struct FlattenVertexUniform
 } FlattenVertexUniform;
 
 static_assert(sizeof(FlattenVertexUniform) == 12U, "Invalid FlattenVertexUniform size");
-
 
 static VkLayerProperties s_layerProperties[MAX_VULKAN_LAYER_COUNT];
 static const char* s_layerNames[MAX_VULKAN_LAYER_COUNT];
@@ -121,7 +120,8 @@ static VkSemaphore s_imageOwnershipSemaphores[FRAME_LAG] = { VK_NULL_HANDLE };
 static VkCommandPool s_commandPool = VK_NULL_HANDLE;
 static VkCommandPool s_presentCommandPool = VK_NULL_HANDLE;
 static VkCommandBuffer s_commandBuffers[1] = { VK_NULL_HANDLE };
-static VkQueryPool s_queryPool = VK_NULL_HANDLE;
+static VkQueryPool s_timestampQueryPool = VK_NULL_HANDLE;
+static VkQueryPool s_occlusionQueryPool = VK_NULL_HANDLE;
 static VkBuffer s_hostVertexAndUniformBuffer = VK_NULL_HANDLE;
 static VkDeviceMemory s_hostVertexUniformMemory = VK_NULL_HANDLE;
 static VkDescriptorSetLayout s_descSetLayout = VK_NULL_HANDLE;
@@ -137,6 +137,7 @@ static bool s_isRenderPrepared = false;
 static float s_currRorationDegree = 0.0f;
 static float s_gpuTimestampPeriod = 0.0f;
 static double s_currGPUDuration = 0.0;
+static uint64_t s_currOcclusionCount = 0;
 
 struct
 {
@@ -1166,23 +1167,6 @@ static bool CreateCommandBufferAndBeginCommand(void)
         }
     }
 
-    // Create the query pool
-    const VkQueryPoolCreateInfo queryPoolCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .queryType = VK_QUERY_TYPE_TIMESTAMP,
-        .queryCount = 2 * s_swapchainImageCount,
-        .pipelineStatistics = 0U
-    };
-
-    res = vkCreateQueryPool(s_specDevice, &queryPoolCreateInfo, NULL, &s_queryPool);
-    if (res != VK_SUCCESS)
-    {
-        printf("vkCreateQueryPool failed: %d\n", res);
-        return false;
-    }
-
     const VkCommandBufferBeginInfo cmdBufBeginInfo = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .pNext = NULL,
@@ -1193,6 +1177,44 @@ static bool CreateCommandBufferAndBeginCommand(void)
     if (res != VK_SUCCESS)
     {
         printf("vkBeginCommandBuffer failed: %d\n", res);
+        return false;
+    }
+
+    return true;
+}
+
+static bool CreateQueryPools(void)
+{
+    // Create the timestamp query pool
+    const VkQueryPoolCreateInfo timestampQueryPoolCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .queryType = VK_QUERY_TYPE_TIMESTAMP,
+        .queryCount = 2 * s_swapchainImageCount,
+        .pipelineStatistics = 0
+    };
+
+    VkResult res = vkCreateQueryPool(s_specDevice, &timestampQueryPoolCreateInfo, NULL, &s_timestampQueryPool);
+    if (res != VK_SUCCESS)
+    {
+        printf("vkCreateQueryPool for timestamp failed: %d\n", res);
+        return false;
+    }
+
+    const VkQueryPoolCreateInfo occlusionQueryPoolCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .queryType = VK_QUERY_TYPE_OCCLUSION,
+        .queryCount = s_swapchainImageCount,
+        .pipelineStatistics = 0
+    };
+    
+    res = vkCreateQueryPool(s_specDevice, &occlusionQueryPoolCreateInfo, NULL, &s_occlusionQueryPool);
+    if (res != VK_SUCCESS)
+    {
+        printf("vkCreateQueryPool for occlusion failed: %d\n", res);
         return false;
     }
 
@@ -2147,9 +2169,12 @@ static bool RecordCommandsForDraw(VkCommandBuffer inputCmdBuf, uint32_t swapchai
         return false;
     }
 
+    // Reset the query pools
+    vkCmdResetQueryPool(inputCmdBuf, s_occlusionQueryPool, swapchainIndex, 1);
+    vkCmdResetQueryPool(inputCmdBuf, s_timestampQueryPool, swapchainIndex * 2, 1);
+
     // Begin the timestamp query
-    vkCmdResetQueryPool(inputCmdBuf, s_queryPool, swapchainIndex * 2, 1);
-    vkCmdWriteTimestamp(inputCmdBuf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, s_queryPool, swapchainIndex * 2);
+    vkCmdWriteTimestamp(inputCmdBuf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, s_timestampQueryPool, swapchainIndex * 2);
 
     const VkClearValue clearValues[] = {
         { .color.float32 = { 0.4f, 0.5f, 0.4f, 1.0f } },
@@ -2198,6 +2223,9 @@ static bool RecordCommandsForDraw(VkCommandBuffer inputCmdBuf, uint32_t swapchai
     };
     vkCmdSetScissor(inputCmdBuf, 0, 1, &scissor);
 
+    // Begin the occlusion query
+    vkCmdBeginQuery(inputCmdBuf, s_occlusionQueryPool, swapchainIndex, VK_QUERY_CONTROL_PRECISE_BIT);
+
     // Draw
     for (int i = 0; i < 2; ++i)
     {
@@ -2207,6 +2235,9 @@ static bool RecordCommandsForDraw(VkCommandBuffer inputCmdBuf, uint32_t swapchai
     // Draw the geometry shader test primitives
     vkCmdBindPipeline(inputCmdBuf, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipelines[2]);
     vkCmdDraw(inputCmdBuf, 1, 1, 0, 0);
+
+    // End the occlusion query
+    vkCmdEndQuery(inputCmdBuf, s_occlusionQueryPool, swapchainIndex);
 
     // Note that ending the renderpass changes the image's layout from
     // COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC_KHR
@@ -2268,8 +2299,8 @@ static bool RecordCommandsForDraw(VkCommandBuffer inputCmdBuf, uint32_t swapchai
         0, NULL, 1, &copyBarrier, 0, NULL);
 
     // End the query timestamp
-    vkCmdResetQueryPool(inputCmdBuf, s_queryPool, swapchainIndex * 2 + 1, 1);
-    vkCmdWriteTimestamp(inputCmdBuf, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s_queryPool, swapchainIndex * 2 + 1);
+    vkCmdResetQueryPool(inputCmdBuf, s_timestampQueryPool, swapchainIndex * 2 + 1, 1);
+    vkCmdWriteTimestamp(inputCmdBuf, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s_timestampQueryPool, swapchainIndex * 2 + 1);
 
     res = vkEndCommandBuffer(inputCmdBuf);
     if (res != VK_SUCCESS)
@@ -2536,9 +2567,10 @@ static void DrawObjects(HINSTANCE hInstance, HWND hWnd, int currFrameIndex)
         break;
     }
 
-    // Fetch the query result
+    // Fetch the timestamp query result
     uint64_t timestamps[MAX_SWAPCHAIN_IMAGE_COUNT * 2] = { 0 };
-    res = vkGetQueryPoolResults(s_specDevice, s_queryPool, 0, 2 * s_swapchainImageCount, sizeof(timestamps), timestamps, sizeof(timestamps[0]), VK_QUERY_RESULT_64_BIT);
+    res = vkGetQueryPoolResults(s_specDevice, s_timestampQueryPool, 0, 2 * s_swapchainImageCount, 
+                        sizeof(timestamps), timestamps, sizeof(timestamps[0]), VK_QUERY_RESULT_64_BIT);
     if (res == VK_SUCCESS)
     {
         uint64_t sumDuration = 0;
@@ -2549,6 +2581,19 @@ static void DrawObjects(HINSTANCE hInstance, HWND hWnd, int currFrameIndex)
     }
     else if(res == VK_NOT_READY){
         puts("vkGetQueryPoolResults: query not ready...");
+    }
+
+    // Fetch the occlusion query result
+    uint64_t occlusions[MAX_SWAPCHAIN_IMAGE_COUNT] = { 0 };
+    res = vkGetQueryPoolResults(s_specDevice, s_occlusionQueryPool, 0, s_swapchainImageCount,
+        sizeof(occlusions), occlusions, sizeof(occlusions[0]), VK_QUERY_RESULT_64_BIT);
+    if (res == VK_SUCCESS)
+    {
+        uint64_t sum = 0;
+        for (uint32_t i = 0; i < s_swapchainImageCount; ++i) {
+            sum += occlusions[i];
+        }
+        s_currOcclusionCount = sum / s_swapchainImageCount;
     }
 
     ++s_drawCount;
@@ -2657,8 +2702,11 @@ static void DestroyVulkanAssets(void)
     if (s_depthResource.device_memory != VK_NULL_HANDLE) {
         vkFreeMemory(s_specDevice, s_depthResource.device_memory, NULL);
     }
-    if (s_queryPool != VK_NULL_HANDLE) {
-        vkDestroyQueryPool(s_specDevice, s_queryPool, NULL);
+    if (s_timestampQueryPool != VK_NULL_HANDLE) {
+        vkDestroyQueryPool(s_specDevice, s_timestampQueryPool, NULL);
+    }
+    if (s_occlusionQueryPool != VK_NULL_HANDLE) {
+        vkDestroyQueryPool(s_specDevice, s_occlusionQueryPool, NULL);
     }
     if (s_commandPool != VK_NULL_HANDLE)
     {
@@ -2680,11 +2728,11 @@ static void DestroyVulkanAssets(void)
     if (s_swapchain != VK_NULL_HANDLE) {
         vkDestroySwapchainKHR(s_specDevice, s_swapchain, NULL);
     }
-    if (s_surface != VK_NULL_HANDLE) {
-        vkDestroySurfaceKHR(s_instance, s_surface, NULL);
-    }
     if (s_specDevice != VK_NULL_HANDLE) {
         vkDestroyDevice(s_specDevice, NULL);
+    }
+    if (s_surface != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(s_instance, s_surface, NULL);
     }
     if (s_instance != VK_NULL_HANDLE) {
         vkDestroyInstance(s_instance, NULL);
@@ -2693,7 +2741,7 @@ static void DestroyVulkanAssets(void)
 
 static int s_currFrameIndex = 0;
 static POINT s_wndMinsize;                // minimum window size
-static const char s_appName[] = "Vulkan Simple Render";
+static const char s_appName[] = "Vulkan Advanced";
 
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -2703,6 +2751,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     {
         RECT windowRect;
         GetWindowRect(hWnd, &windowRect);
+        SetWindowLongA(hWnd, GWL_STYLE, GetWindowLongA(hWnd, GWL_STYLE) & ~WS_MINIMIZEBOX);
+        SetWindowLongA(hWnd, GWL_STYLE, GetWindowLongA(hWnd, GWL_STYLE) & ~WS_MAXIMIZEBOX);
+        SetWindowLongA(hWnd, GWL_STYLE, GetWindowLongA(hWnd, GWL_STYLE) & ~WS_SIZEBOX);
         break;
     }
 
@@ -2719,7 +2770,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         if (s_drawCount % 60 == 0)
         {
             char buffer[64];
-            sprintf_s(buffer, sizeof(buffer), "%s -- GPU usage duration: %.2f ms", s_appName, s_currGPUDuration);
+            sprintf_s(buffer, sizeof(buffer), "%s -- GPU: %.2f ms | occlusions: %u", s_appName, s_currGPUDuration, (uint32_t)s_currOcclusionCount);
             SetWindowTextA(hWnd, buffer);
         }
         break;
@@ -2848,6 +2899,7 @@ int main(int argc, const char* const argv[])
         if (!CreateVulkanSwapchain()) break;
         if (!CreateFencesAndSemaphores()) break;
         if (!CreateCommandBufferAndBeginCommand()) break;
+        if (!CreateQueryPools()) break;
         if (!CreateVertexAndUniformBuffersAndMemories()) break;
         CopyFromHostToDeviceBuffersAndSync();
         if (!CreateDepthReource()) break;
