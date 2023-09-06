@@ -107,6 +107,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <AdditionalIncludeDirectories>%VK_SDK_PATH%/Include</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8  /Zc:__cplusplus /experimental:c11atomics %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -126,6 +127,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <AdditionalIncludeDirectories>%VK_SDK_PATH%/Include</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8  /Zc:__cplusplus /experimental:c11atomics %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -140,13 +142,14 @@
     <ClCompile Include="main.c" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="flatten.frag.glsl" />
-    <None Include="flatten.vert.glsl" />
-    <None Include="geomtest.frag.glsl" />
-    <None Include="geomtest.geom.glsl" />
-    <None Include="geomtest.vert.glsl" />
-    <None Include="gradient.frag.glsl" />
-    <None Include="gradient.vert.glsl" />
+    <None Include="shaders\flatten.frag.glsl" />
+    <None Include="shaders\flatten.vert.glsl" />
+    <None Include="shaders\geomtest.frag.glsl" />
+    <None Include="shaders\geomtest.geom.glsl" />
+    <None Include="shaders\geomtest.vert.glsl" />
+    <None Include="shaders\glsl_builder.bat" />
+    <None Include="shaders\gradient.frag.glsl" />
+    <None Include="shaders\gradient.vert.glsl" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

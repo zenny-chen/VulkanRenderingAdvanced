@@ -1,4 +1,4 @@
-﻿// VulkanSimpleRender.cpp : 此文件包含 "main" 函数。程序执行将在此处开始并结束。
+// VulkanSimpleRender.cpp : 此文件包含 "main" 函数。程序执行将在此处开始并结束。
 //
 
 #include <stdio.h>
@@ -2905,9 +2905,9 @@ int main(int argc, const char* const argv[])
         if (!CreateDepthReource()) break;
         if (!CreateDescriptorSetAndPipelineLayout()) break;
         if (!CreateRenderPass()) break;
-        if (!CreateGraphicsPipeline("flatten.vert.spv", "flatten.frag.spv", NULL, 0)) break;
-        if (!CreateGraphicsPipeline("gradient.vert.spv", "gradient.frag.spv", NULL, 1)) break;
-        if (!CreateGraphicsPipeline("geomtest.vert.spv", "geomtest.frag.spv", "geomtest.geom.spv", 2)) break;
+        if (!CreateGraphicsPipeline("shaders/flatten.vert.spv", "shaders/flatten.frag.spv", NULL, 0)) break;
+        if (!CreateGraphicsPipeline("shaders/gradient.vert.spv", "shaders/gradient.frag.spv", NULL, 1)) break;
+        if (!CreateGraphicsPipeline("shaders/geomtest.vert.spv", "shaders/geomtest.frag.spv", "shaders/geomtest.geom.spv", 2)) break;
         if (!CreateDescriptorPoolAndSet()) break;
         if (!CreateFramebuffers()) break;
         
@@ -2961,3 +2961,4 @@ int main(int argc, const char* const argv[])
 //   4. 使用错误列表窗口查看错误
 //   5. 转到“项目”>“添加新项”以创建新的代码文件，或转到“项目”>“添加现有项”以将现有代码文件添加到项目
 //   6. 将来，若要再次打开此项目，请转到“文件”>“打开”>“项目”并选择 .sln 文件
+

@@ -13,6 +13,9 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="资源文件\shaders">
+      <UniqueIdentifier>{f6c592cc-42cc-4df6-864a-3f072579449e}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.c">
@@ -20,26 +23,29 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <None Include="flatten.frag.glsl">
-      <Filter>资源文件</Filter>
+    <None Include="shaders\flatten.frag.glsl">
+      <Filter>资源文件\shaders</Filter>
     </None>
-    <None Include="flatten.vert.glsl">
-      <Filter>资源文件</Filter>
+    <None Include="shaders\flatten.vert.glsl">
+      <Filter>资源文件\shaders</Filter>
     </None>
-    <None Include="gradient.frag.glsl">
-      <Filter>资源文件</Filter>
+    <None Include="shaders\geomtest.frag.glsl">
+      <Filter>资源文件\shaders</Filter>
     </None>
-    <None Include="gradient.vert.glsl">
-      <Filter>资源文件</Filter>
+    <None Include="shaders\geomtest.geom.glsl">
+      <Filter>资源文件\shaders</Filter>
     </None>
-    <None Include="geomtest.frag.glsl">
-      <Filter>资源文件</Filter>
+    <None Include="shaders\geomtest.vert.glsl">
+      <Filter>资源文件\shaders</Filter>
     </None>
-    <None Include="geomtest.geom.glsl">
-      <Filter>资源文件</Filter>
+    <None Include="shaders\glsl_builder.bat">
+      <Filter>资源文件\shaders</Filter>
     </None>
-    <None Include="geomtest.vert.glsl">
-      <Filter>资源文件</Filter>
+    <None Include="shaders\gradient.frag.glsl">
+      <Filter>资源文件\shaders</Filter>
+    </None>
+    <None Include="shaders\gradient.vert.glsl">
+      <Filter>资源文件\shaders</Filter>
     </None>
   </ItemGroup>
 </Project>
