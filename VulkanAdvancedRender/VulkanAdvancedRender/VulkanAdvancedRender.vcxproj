@@ -142,6 +142,9 @@
     <ClCompile Include="main.c" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="shaders\basic_ms.frag.glsl" />
+    <None Include="shaders\basic_ms.mesh.glsl" />
+    <None Include="shaders\basic_ms.task.glsl" />
     <None Include="shaders\flatten.frag.glsl" />
     <None Include="shaders\flatten.vert.glsl" />
     <None Include="shaders\geomtest.frag.glsl" />

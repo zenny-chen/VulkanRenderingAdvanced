@@ -127,12 +127,30 @@ static VkDeviceMemory s_hostVertexUniformMemory = VK_NULL_HANDLE;
 static VkDescriptorSetLayout s_descSetLayout = VK_NULL_HANDLE;
 static VkPipelineLayout s_pipelineLayout = VK_NULL_HANDLE;
 static VkRenderPass s_render_pass = VK_NULL_HANDLE;
-static VkShaderModule s_vertex_shader_module = VK_NULL_HANDLE;
-static VkShaderModule s_geometry_shader_module = VK_NULL_HANDLE;
-static VkShaderModule s_fragment_shader_module = VK_NULL_HANDLE;
 static VkPipelineCache s_pipelineCaches[8] = { VK_NULL_HANDLE };
 static VkPipeline s_pipelines[8] = { VK_NULL_HANDLE };
 static VkDescriptorPool s_descPool = VK_NULL_HANDLE;
+
+static PFN_vkCmdDrawMeshTasksEXT dyn_vkCmdDrawMeshTasksEXT = NULL;
+
+static uint32_t s_maxTaskWorkGroupTotalCount = 0U;
+static uint32_t s_maxTaskWorkGroupInvocations = 0U;
+static uint32_t s_maxTaskPayloadSize = 0U;
+static uint32_t s_maxTaskSharedMemorySize = 0U;
+static uint32_t s_maxTaskPayloadAndSharedMemorySize = 0U;
+static uint32_t s_maxMeshWorkGroupTotalCount = 0U;
+static uint32_t s_maxMeshWorkGroupInvocations = 0U;
+static uint32_t s_maxMeshSharedMemorySize = 0U;
+static uint32_t s_maxMeshPayloadAndSharedMemorySize = 0U;
+static uint32_t s_maxMeshOutputMemorySize = 0U;
+static uint32_t s_maxMeshPayloadAndOutputMemorySize = 0U;
+static uint32_t s_maxMeshOutputComponents = 0U;
+static uint32_t s_maxMeshOutputVertices = 0U;
+static uint32_t s_maxMeshOutputPrimitives = 0U;
+static uint32_t s_maxMeshOutputLayers = 0U;
+static uint32_t s_maxPreferredTaskWorkGroupInvocations = 0U;
+static uint32_t s_maxPreferredMeshWorkGroupInvocations = 0U;
+
 static bool s_isRenderPrepared = false;
 static float s_currRorationDegree = 0.0f;
 static float s_gpuTimestampPeriod = 0.0f;
@@ -342,15 +360,24 @@ static bool InitializeVulkanInstance(const char *appName, const char *engineName
     }
     printf("Found %u required instance extensions!\n", availExtensionCount);
 
+    const char* notStr = "is";
     if (!supportSurface) {
-        printf("%s not supported!\n", VK_KHR_SURFACE_EXTENSION_NAME);
+        notStr = "not";
     }
+    printf("%s %s supported!\n", VK_KHR_SURFACE_EXTENSION_NAME, notStr);
+    notStr = "is";
+
     if (!supportFurfaceWin32) {
-        printf("%s not supported!\n", VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+        notStr = "not";
     }
+    printf("%s %s supported!\n", VK_KHR_WIN32_SURFACE_EXTENSION_NAME, notStr);
+    notStr = "is";
+
     if (!supportColorSpaceExt) {
-        printf("%s not supported!\n", VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+        notStr = "not";
     }
+    printf("%s %s supported!\n", VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME, notStr);
+    notStr = "is";
 
     // initialize the VkInstanceCreateInfo structure
     const VkInstanceCreateInfo inst_info = {
@@ -464,11 +491,13 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
     }
 
     uint32_t availExtensionCount = 0;
-    const char* availExtensionNames[8];
+    const char* availExtensionNames[16];
 
     bool supportSwapchain = false;
     bool supportScalarBlock = false;
     bool supportDriverProperties = false;
+    bool supportSPIRV1_4 = false;
+    bool supportMeshShader = false;
 
     for (uint32_t i = 0; i < extPropCount; ++i)
     {
@@ -498,16 +527,56 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
             availExtensionNames[availExtensionCount++] = currExtName;
             continue;
         }
+        if (strcmp(currExtName, VK_KHR_SPIRV_1_4_EXTENSION_NAME) == 0)
+        {
+            supportSPIRV1_4 = true;
+            availExtensionNames[availExtensionCount++] = currExtName;
+            continue;
+        }
+        if (strcmp(currExtName, VK_EXT_MESH_SHADER_EXTENSION_NAME) == 0)
+        {
+            supportMeshShader = true;
+            availExtensionNames[availExtensionCount++] = currExtName;
+            continue;
+        }
     }
+
+    const char* notStr = "is";
     if (!supportSwapchain) {
-        printf("%s feature not supported!\n", VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+        notStr = "not";
     }
+    printf("%s feature %s supported!\n", VK_KHR_SWAPCHAIN_EXTENSION_NAME, notStr);
+    notStr = "is";
+
+    if (!supportScalarBlock) {
+        notStr = "not";
+    }
+    printf("%s feature %s supported!\n", VK_EXT_SCALAR_BLOCK_LAYOUT_EXTENSION_NAME, notStr);
+    notStr = "is";
+
     if (!s_supportIncrementalPresent) {
-        printf("%s feature not supported!\n", VK_KHR_INCREMENTAL_PRESENT_EXTENSION_NAME);
+        notStr = "not";
     }
+    printf("%s feature %s supported!\n", VK_KHR_INCREMENTAL_PRESENT_EXTENSION_NAME, notStr);
+    notStr = "is";
+
     if (!supportDriverProperties) {
-        printf("%s feature not supported or not explicitly given!\n", VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME);
+        notStr = "not";
     }
+    printf("%s feature %s supported or not explicitly given!\n", VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME, notStr);
+    notStr = "is";
+
+    if (!supportSPIRV1_4) {
+        notStr = "not";
+    }
+    printf("%s feature %s supported!\n", VK_KHR_SPIRV_1_4_EXTENSION_NAME, notStr);
+    notStr = "is";
+
+    if (!supportMeshShader) {
+        notStr = "not";
+    }
+    printf("%s feature %s supported!\n", VK_EXT_MESH_SHADER_EXTENSION_NAME, notStr);
+    notStr = "is";
 
     printf("Available required device extension count: %u\n\n", availExtensionCount);
 
@@ -518,15 +587,59 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
         .pNext = NULL
     };
 
+    VkPhysicalDeviceMeshShaderPropertiesEXT meshShaderProps = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT,
+        .pNext = &driverProps
+    };
+
     VkPhysicalDeviceProperties2 properties2 = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
         // link to driverProps
-        .pNext = &driverProps
+        .pNext = &meshShaderProps
     };
 
     // Query all above properties
     vkGetPhysicalDeviceProperties2(s_currPhysicalDevice, &properties2);
+
     printf("Detail driver info: %s %s\n", driverProps.driverName, driverProps.driverInfo);
+
+    if (supportMeshShader)
+    {
+        s_maxTaskWorkGroupTotalCount = meshShaderProps.maxTaskWorkGroupTotalCount;
+        printf("In task shader, max total work group count: %u (%uK)\n", s_maxTaskWorkGroupTotalCount, s_maxTaskWorkGroupTotalCount / 1024U);
+        s_maxTaskWorkGroupInvocations = meshShaderProps.maxTaskWorkGroupInvocations;
+        printf("In task shader, max work group invocation count: %u\n", s_maxTaskWorkGroupInvocations);
+        s_maxPreferredTaskWorkGroupInvocations = meshShaderProps.maxPreferredTaskWorkGroupInvocations;
+        printf("In task shader, max work group preferred invocation count: %u\n", s_maxPreferredTaskWorkGroupInvocations);
+        s_maxTaskPayloadSize = meshShaderProps.maxTaskPayloadSize;
+        printf("In task shader, max payload size: %uKB\n", s_maxTaskPayloadSize / 1024U);
+        s_maxTaskSharedMemorySize = meshShaderProps.maxTaskSharedMemorySize;
+        printf("In task shader, max shared memory size: %uKB\n", s_maxTaskSharedMemorySize / 1024U);
+        s_maxTaskPayloadAndSharedMemorySize = meshShaderProps.maxTaskPayloadAndSharedMemorySize;
+        printf("In task shader, max payload and shared memory size: %uKB\n", s_maxTaskPayloadAndSharedMemorySize / 1024U);
+        s_maxMeshWorkGroupTotalCount = meshShaderProps.maxMeshWorkGroupTotalCount;
+        printf("In mesh shader, max total work group count: %u (%uK)\n", s_maxMeshWorkGroupTotalCount, s_maxMeshWorkGroupTotalCount / 1024U);
+        s_maxMeshWorkGroupInvocations = meshShaderProps.maxMeshWorkGroupInvocations;
+        printf("In mesh shader, max work group invocation count: %u\n", s_maxMeshWorkGroupInvocations);
+        s_maxPreferredMeshWorkGroupInvocations = meshShaderProps.maxPreferredMeshWorkGroupInvocations;
+        printf("In mesh shader, max work group preferred invocation count: %u\n", s_maxPreferredMeshWorkGroupInvocations);
+        s_maxMeshSharedMemorySize = meshShaderProps.maxMeshSharedMemorySize;
+        printf("In mesh shader, max shared memory size: %uKB\n", s_maxMeshSharedMemorySize / 1024U);
+        s_maxMeshPayloadAndSharedMemorySize = meshShaderProps.maxMeshPayloadAndSharedMemorySize;
+        printf("In mesh shader, max payload and shared memory size: %uKB\n", s_maxMeshPayloadAndSharedMemorySize);
+        s_maxMeshOutputMemorySize = meshShaderProps.maxMeshOutputMemorySize;
+        printf("In mesh shader, max output memory size: %uKB\n", s_maxMeshOutputMemorySize / 1024U);
+        s_maxMeshPayloadAndOutputMemorySize = meshShaderProps.maxMeshPayloadAndOutputMemorySize;
+        printf("In mesh shader, max payload and output memory size: %uKB\n", s_maxMeshPayloadAndOutputMemorySize / 1024U);
+        s_maxMeshOutputComponents = meshShaderProps.maxMeshOutputComponents;
+        printf("In mesh shader, max output component count: %u\n", s_maxMeshOutputComponents);
+        s_maxMeshOutputVertices = meshShaderProps.maxMeshOutputVertices;
+        printf("In mesh shader, max output vertex count: %u\n", s_maxMeshOutputVertices);
+        s_maxMeshOutputPrimitives = meshShaderProps.maxMeshOutputPrimitives;
+        printf("In mesh shader, max output primitive count: %u\n", s_maxMeshOutputPrimitives);
+        s_maxMeshOutputLayers = meshShaderProps.maxMeshOutputLayers;
+        printf("In mesh shader, max output layer count: %u\n", s_maxMeshOutputLayers);
+    }
 
     s_gpuTimestampPeriod = properties2.properties.limits.timestampPeriod;
 
@@ -536,11 +649,16 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
         .pNext = NULL
     };
 
+    VkPhysicalDeviceMeshShaderFeaturesEXT meshShaderFeature = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT,
+        .pNext = &scalarBlockLayoutFeature
+    };
+
     // physical device feature 2
     VkPhysicalDeviceFeatures2 features2 = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
         // link to subgroupSizeControlFeature node
-        .pNext = &scalarBlockLayoutFeature
+        .pNext = &meshShaderFeature
     };
 
     // Query all above features
@@ -548,6 +666,18 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
 
     if (scalarBlockLayoutFeature.scalarBlockLayout == VK_FALSE) {
         printf("%s feature not supported!\n", VK_EXT_SCALAR_BLOCK_LAYOUT_EXTENSION_NAME);
+    }
+    if (supportMeshShader)
+    {
+        printf("Current device supports task shader? %s\n", meshShaderFeature.taskShader == VK_FALSE ? "NO" : "YES");
+        printf("Current device supports mesh shader? %s\n", meshShaderFeature.meshShader == VK_FALSE ? "NO" : "YES");
+        printf("Current device supports multi-view mesh shader? %s\n", meshShaderFeature.multiviewMeshShader == VK_FALSE ? "NO" : "YES");
+        printf("Current device supports primitive fragment shading rate mesh shader? %s\n", meshShaderFeature.primitiveFragmentShadingRateMeshShader == VK_FALSE ? "NO" : "YES");
+        printf("Current device supports mesh shader queries? %s\n", meshShaderFeature.meshShaderQueries == VK_FALSE ? "NO" : "YES");
+    }
+
+    if (supportMeshShader && supportSPIRV1_4 && meshShaderFeature.taskShader != VK_FALSE && meshShaderFeature.meshShader != VK_FALSE) {
+        dyn_vkCmdDrawMeshTasksEXT = (PFN_vkCmdDrawMeshTasksEXT)vkGetInstanceProcAddr(s_instance, "vkCmdDrawMeshTasksEXT");
     }
 
     const float queue_priorities[1] = { 0.0f };
@@ -1600,7 +1730,7 @@ static bool CreateDescriptorSetAndPipelineLayout(void)
             .binding = 0,
             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             .descriptorCount = 1,
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_MESH_BIT_EXT,
             .pImmutableSamplers = NULL,
         }
     };
@@ -1775,278 +1905,499 @@ static bool CreateShaderModule(const char* fileName, VkShaderModule* pShaderModu
     return res == VK_SUCCESS;
 }
 
-static bool CreateVertAndFragShaderModules(const char* vertSPVFilePath, const char* fragSPVFilePath, const char *geomSPVFilePath)
-{
-    if (!CreateShaderModule(vertSPVFilePath, &s_vertex_shader_module)) return false;
-    if (geomSPVFilePath != NULL) {
-        if (!CreateShaderModule(geomSPVFilePath, &s_geometry_shader_module)) return false;
-    }
-    if (!CreateShaderModule(fragSPVFilePath, &s_fragment_shader_module)) return false;
-
-    return true;
-}
-
 static bool CreateGraphicsPipeline(const char* vertSPVFilePath, const char* fragSPVFilePath, const char* geomSPVFilePath, int index)
 {
-    if (!CreateVertAndFragShaderModules(vertSPVFilePath, fragSPVFilePath, geomSPVFilePath)) {
-        return false;
-    }
+    VkShaderModule vertexShaderModule = VK_NULL_HANDLE;
+    VkShaderModule fragmentShaderModule = VK_NULL_HANDLE;
+    VkShaderModule geometryShaderModule = VK_NULL_HANDLE;
+    VkResult res = VK_ERROR_INITIALIZATION_FAILED;
 
-    const uint32_t stageCount = geomSPVFilePath == NULL ? 2U : 3U;
-
-    const VkSpecializationMapEntry mapEntries[] = {
-        {
-            .constantID = 0U,
-            .offset = 0U,
-            .size = sizeof(float)
+    do
+    {
+        if (!CreateShaderModule(vertSPVFilePath, &vertexShaderModule)) break;
+        if (!CreateShaderModule(fragSPVFilePath, &fragmentShaderModule)) break;
+        if (geomSPVFilePath != NULL) {
+            if (!CreateShaderModule(geomSPVFilePath, &geometryShaderModule)) break;
         }
-    };
-    const float edgeWidth = 0.4f;
-    const VkSpecializationInfo specializationInfo = {
-        .mapEntryCount = 1U,
-        .pMapEntries = mapEntries,
-        .dataSize = sizeof(float),
-        .pData = &edgeWidth
-    };
 
-    // Two or three shader stages
-    const VkPipelineShaderStageCreateInfo shaderStages[] = {
-        // vertex shader
-        {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        const uint32_t stageCount = geomSPVFilePath == NULL ? 2U : 3U;
+
+        const VkSpecializationMapEntry mapEntries[] = {
+            {
+                .constantID = 0U,
+                .offset = 0U,
+                .size = sizeof(float)
+            }
+        };
+        const float edgeWidth = 0.4f;
+        const VkSpecializationInfo specializationInfo = {
+            .mapEntryCount = 1U,
+            .pMapEntries = mapEntries,
+            .dataSize = sizeof(float),
+            .pData = &edgeWidth
+        };
+
+        // Two or three shader stages
+        const VkPipelineShaderStageCreateInfo shaderStages[] = {
+            // vertex shader
+            {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = NULL,
+                .flags = 0,
+                .stage = VK_SHADER_STAGE_VERTEX_BIT,
+                .module = vertexShaderModule,
+                .pName = "main",
+                .pSpecializationInfo = NULL
+            },
+            // fragment shader
+            {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = NULL,
+                .flags = 0,
+                .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+                .module = fragmentShaderModule,
+                .pName = "main",
+                .pSpecializationInfo = NULL
+            },
+            // Optional geometry shader
+            {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = NULL,
+                .flags = 0,
+                .stage = VK_SHADER_STAGE_GEOMETRY_BIT,
+                .module = geometryShaderModule,
+                .pName = "main",
+                .pSpecializationInfo = &specializationInfo
+            }
+        };
+
+        const VkVertexInputBindingDescription vertexInputBindings[] = {
+            // coords buffer
+            {
+                .binding = 0,
+                .stride = sizeof(float[4]),
+                .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
+            },
+            // color buffer
+            {
+                .binding = 1,
+                .stride = sizeof(float[4]),
+                .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
+            }
+        };
+
+        const VkVertexInputAttributeDescription vertexInputAttributes[] = {
+            // inPos attribute
+            {
+                .location = 0,
+                .binding = 0,
+                .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+                .offset = 0
+            },
+            // inColor attribute
+            {
+                .location = 1,
+                .binding = 1,
+                .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+                .offset = 0
+            }
+        };
+
+        const VkPipelineVertexInputStateCreateInfo vertexInputStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             .pNext = NULL,
             .flags = 0,
-            .stage = VK_SHADER_STAGE_VERTEX_BIT,
-            .module = s_vertex_shader_module,
-            .pName = "main",
-            .pSpecializationInfo = NULL
-        },
-        // fragment shader
-        {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .vertexBindingDescriptionCount = (uint32_t)(sizeof(vertexInputBindings) / sizeof(vertexInputBindings[0])),
+            .pVertexBindingDescriptions = vertexInputBindings,
+            .vertexAttributeDescriptionCount = (uint32_t)(sizeof(vertexInputAttributes) / sizeof(vertexInputAttributes[0])),
+            .pVertexAttributeDescriptions = vertexInputAttributes
+        };
+
+        const VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
             .pNext = NULL,
             .flags = 0,
-            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-            .module = s_fragment_shader_module,
-            .pName = "main",
-            .pSpecializationInfo = NULL
-        },
-        // Optional geometry shader
-        {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            // geometry shader test uses point primitive topology while the other tests use triangle strip topology
+            .topology = stageCount == 2 ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP : VK_PRIMITIVE_TOPOLOGY_POINT_LIST,
+            .primitiveRestartEnable = VK_FALSE
+        };
+
+        const VkPipelineViewportStateCreateInfo viewportStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
             .pNext = NULL,
             .flags = 0,
-            .stage = VK_SHADER_STAGE_GEOMETRY_BIT,
-            .module = s_geometry_shader_module,
-            .pName = "main",
-            .pSpecializationInfo = &specializationInfo
+            .viewportCount = 1,
+            .pViewports = NULL,     // As the viewport state is dynamic, this member is ignored.
+            .scissorCount = 1,
+            .pScissors = NULL       // As the scissor state is dynamic, this member is ignored.
+        };
+
+        const VkPipelineRasterizationStateCreateInfo rasterizationStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .depthClampEnable = VK_FALSE,
+            .rasterizerDiscardEnable = VK_FALSE,
+            .polygonMode = VK_POLYGON_MODE_FILL,
+            // Index 1 and 2 squares rotate about the y-axis and x-axis separately so that the back face should not be culled.
+            .cullMode = index == 2 ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE,
+            .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+            .depthBiasEnable = VK_FALSE,
+            .depthBiasConstantFactor = 0.0f,
+            .depthBiasClamp = 1.0f,
+            .depthBiasSlopeFactor = 0.0f,
+            .lineWidth = 1.0f,
+        };
+
+        const VkPipelineMultisampleStateCreateInfo multisampleStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+            .sampleShadingEnable = VK_FALSE,
+            .minSampleShading = 0.0f,
+            .pSampleMask = NULL,
+            .alphaToCoverageEnable = VK_FALSE,
+            .alphaToOneEnable = VK_FALSE
+        };
+
+        const VkStencilOpState stencilOpState = {
+            .failOp = VK_STENCIL_OP_KEEP,
+            .passOp = VK_STENCIL_OP_KEEP,
+            .depthFailOp = VK_STENCIL_OP_KEEP,
+            .compareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+            .compareMask = 0,
+            .writeMask = 0,
+            .reference = 0
+        };
+
+        const VkPipelineDepthStencilStateCreateInfo depthStencilStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .depthTestEnable = VK_TRUE,
+            .depthWriteEnable = VK_TRUE,
+            .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+            .depthBoundsTestEnable = VK_FALSE,
+            .stencilTestEnable = VK_FALSE,
+            .front = stencilOpState,
+            .back = stencilOpState,
+            .minDepthBounds = 0.0f,
+            .maxDepthBounds = 0.0f
+        };
+
+        const VkPipelineColorBlendAttachmentState attatchmentStates[1] = {
+            {
+                .blendEnable = VK_FALSE,
+                .srcColorBlendFactor = VK_BLEND_FACTOR_ZERO,
+                .dstColorBlendFactor = VK_BLEND_FACTOR_ZERO,
+                .colorBlendOp = VK_BLEND_OP_ADD,
+                .srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+                .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+                .alphaBlendOp = VK_BLEND_OP_ADD,
+                .colorWriteMask = 0x0fU
+            }
+        };
+
+        const VkPipelineColorBlendStateCreateInfo colorBlendStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .logicOpEnable = VK_FALSE,
+            .logicOp = VK_LOGIC_OP_CLEAR,
+            .attachmentCount = (uint32_t)(sizeof(attatchmentStates) / sizeof(attatchmentStates[0])),
+            .pAttachments = attatchmentStates,
+            .blendConstants = { 0.0f }
+        };
+
+        const VkPipelineDynamicStateCreateInfo dynamicStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .dynamicStateCount = DYNAMIC_STATE_COUNT,
+            .pDynamicStates = (VkDynamicState[]) { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR }
+        };
+
+        const VkGraphicsPipelineCreateInfo pipelineCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = NULL,
+            .stageCount = stageCount,
+            .pStages = shaderStages,
+            .pVertexInputState = &vertexInputStateCreateInfo,
+            .pInputAssemblyState = &inputAssemblyStateCreateInfo,
+            .pTessellationState = NULL,
+            .pViewportState = &viewportStateCreateInfo,
+            .pRasterizationState = &rasterizationStateCreateInfo,
+            .pMultisampleState = &multisampleStateCreateInfo,
+            .pDepthStencilState = &depthStencilStateCreateInfo,
+            .pColorBlendState = &colorBlendStateCreateInfo,
+            .pDynamicState = &dynamicStateCreateInfo,
+            .layout = s_pipelineLayout,
+            .renderPass = s_render_pass,
+            .subpass = 0,
+            .basePipelineHandle = VK_NULL_HANDLE,
+            .basePipelineIndex = 0
+        };
+
+        const VkPipelineCacheCreateInfo pipelineCache = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .initialDataSize = 0,
+            .pInitialData = NULL
+        };
+
+        res = vkCreatePipelineCache(s_specDevice, &pipelineCache, NULL, &s_pipelineCaches[index]);
+        if (res != VK_SUCCESS)
+        {
+            printf("vkCreatePipelineCache failed: %d\n", res);
+            break;
         }
-    };
 
-    const VkVertexInputBindingDescription vertexInputBindings[] = {
-        // coords buffer
+        res = vkCreateGraphicsPipelines(s_specDevice, s_pipelineCaches[index], 1, &pipelineCreateInfo, NULL, &s_pipelines[index]);
+        if (res != VK_SUCCESS)
         {
-            .binding = 0,
-            .stride = sizeof(float[4]),
-            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
-        },
-        // color buffer
-        {
-            .binding = 1,
-            .stride = sizeof(float[4]),
-            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
+            printf("vkCreateGraphicsPipelines failed: %d\n", res);
+            break;
         }
-    };
+    }
+    while (false);
 
-    const VkVertexInputAttributeDescription vertexInputAttributes[] = {
-        // inPos attribute
-        {
-            .location = 0,
-            .binding = 0,
-            .format = VK_FORMAT_R32G32B32A32_SFLOAT,
-            .offset = 0
-        },
-        // inColor attribute
-        {
-            .location = 1,
-            .binding = 1,
-            .format = VK_FORMAT_R32G32B32A32_SFLOAT,
-            .offset = 0
-        }
-    };
-
-    const VkPipelineVertexInputStateCreateInfo vertexInputStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .vertexBindingDescriptionCount = (uint32_t)(sizeof(vertexInputBindings) / sizeof(vertexInputBindings[0])),
-        .pVertexBindingDescriptions = vertexInputBindings,
-        .vertexAttributeDescriptionCount = (uint32_t)(sizeof(vertexInputAttributes) / sizeof(vertexInputAttributes[0])),
-        .pVertexAttributeDescriptions = vertexInputAttributes
-    };
-
-    const VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        // geometry shader test uses point primitive topology while the other tests use triangle strip topology
-        .topology = stageCount == 2 ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP : VK_PRIMITIVE_TOPOLOGY_POINT_LIST,
-        .primitiveRestartEnable = VK_FALSE
-    };
-
-    const VkPipelineViewportStateCreateInfo viewportStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .viewportCount = 1,
-        .pViewports = NULL,     // As the viewport state is dynamic, this member is ignored.
-        .scissorCount = 1,
-        .pScissors = NULL       // As the scissor state is dynamic, this member is ignored.
-    };
-
-    const VkPipelineRasterizationStateCreateInfo rasterizationStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .depthClampEnable = VK_FALSE,
-        .rasterizerDiscardEnable = VK_FALSE,
-        .polygonMode = VK_POLYGON_MODE_FILL,
-        // Index 0 square rotates about the x-axis so that the back face should not be culled.
-        .cullMode = index == 0 ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT,
-        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-        .depthBiasEnable = VK_FALSE,
-        .depthBiasConstantFactor = 0.0f,
-        .depthBiasClamp = 1.0f,
-        .depthBiasSlopeFactor = 0.0f,
-        .lineWidth = 1.0f,
-    };
-
-    const VkPipelineMultisampleStateCreateInfo multisampleStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
-        .sampleShadingEnable = VK_FALSE,
-        .minSampleShading = 0.0f,
-        .pSampleMask = NULL,
-        .alphaToCoverageEnable = VK_FALSE,
-        .alphaToOneEnable = VK_FALSE
-    };
-
-    const VkStencilOpState stencilOpState = {
-        .failOp = VK_STENCIL_OP_KEEP,
-        .passOp = VK_STENCIL_OP_KEEP,
-        .depthFailOp = VK_STENCIL_OP_KEEP,
-        .compareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
-        .compareMask = 0,
-        .writeMask = 0,
-        .reference = 0
-    };
-
-    const VkPipelineDepthStencilStateCreateInfo depthStencilStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .depthTestEnable = VK_TRUE,
-        .depthWriteEnable = VK_TRUE,
-        .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
-        .depthBoundsTestEnable = VK_FALSE,
-        .stencilTestEnable = VK_FALSE,
-        .front = stencilOpState,
-        .back = stencilOpState,
-        .minDepthBounds = 0.0f,
-        .maxDepthBounds = 0.0f
-    };
-
-    const VkPipelineColorBlendAttachmentState attatchmentStates[1] = {
-        {
-            .blendEnable = VK_FALSE,
-            .srcColorBlendFactor = VK_BLEND_FACTOR_ZERO,
-            .dstColorBlendFactor = VK_BLEND_FACTOR_ZERO,
-            .colorBlendOp = VK_BLEND_OP_ADD,
-            .srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-            .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-            .alphaBlendOp = VK_BLEND_OP_ADD,
-            .colorWriteMask = 0x0fU
-        }
-    };
-
-    const VkPipelineColorBlendStateCreateInfo colorBlendStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .logicOpEnable = VK_FALSE,
-        .logicOp = VK_LOGIC_OP_CLEAR,
-        .attachmentCount = (uint32_t)(sizeof(attatchmentStates) / sizeof(attatchmentStates[0])),
-        .pAttachments = attatchmentStates,
-        .blendConstants = { 0.0f }
-    };
-
-    const VkPipelineDynamicStateCreateInfo dynamicStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .dynamicStateCount = DYNAMIC_STATE_COUNT,
-        .pDynamicStates = (VkDynamicState[]) { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR }
-    };
-
-    const VkGraphicsPipelineCreateInfo pipelineCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-        .pNext = NULL,
-        .stageCount = stageCount,
-        .pStages = shaderStages,
-        .pVertexInputState = &vertexInputStateCreateInfo,
-        .pInputAssemblyState = &inputAssemblyStateCreateInfo,
-        .pTessellationState = NULL,
-        .pViewportState = &viewportStateCreateInfo,
-        .pRasterizationState = &rasterizationStateCreateInfo,
-        .pMultisampleState = &multisampleStateCreateInfo,
-        .pDepthStencilState = &depthStencilStateCreateInfo,
-        .pColorBlendState = &colorBlendStateCreateInfo,
-        .pDynamicState = &dynamicStateCreateInfo,
-        .layout = s_pipelineLayout,
-        .renderPass = s_render_pass,
-        .subpass = 0,
-        .basePipelineHandle = VK_NULL_HANDLE,
-        .basePipelineIndex = 0
-    };
-
-    const VkPipelineCacheCreateInfo pipelineCache = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .initialDataSize = 0,
-        .pInitialData = NULL
-    };
-
-    VkResult res = vkCreatePipelineCache(s_specDevice, &pipelineCache, NULL, &s_pipelineCaches[index]);
-    if (res != VK_SUCCESS)
-    {
-        printf("vkCreatePipelineCache failed: %d\n", res);
-        return false;
+    if (vertexShaderModule != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(s_specDevice, vertexShaderModule, NULL);
+    }
+    if (geometryShaderModule != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(s_specDevice, geometryShaderModule, NULL);
+    }
+    if (fragmentShaderModule != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(s_specDevice, fragmentShaderModule, NULL);
     }
 
-    res = vkCreateGraphicsPipelines(s_specDevice, s_pipelineCaches[index], 1, &pipelineCreateInfo, NULL, &s_pipelines[index]);
-    if (res != VK_SUCCESS)
-    {
-        printf("vkCreateGraphicsPipelines failed: %d\n", res);
-        return false;
-    }
+    return res == VK_SUCCESS;
+}
 
-    if (s_vertex_shader_module != VK_NULL_HANDLE)
+static bool CreateMeshShaderGraphicsPipeline(const char* taskSPVFilePath, const char* meshSPVFilePath, const char* fragmentSPVFilePath, int index)
+{
+    VkShaderModule taskShaderModule = VK_NULL_HANDLE;
+    VkShaderModule meshShaderModule = VK_NULL_HANDLE;
+    VkShaderModule fragmentShaderModule = VK_NULL_HANDLE;
+    VkResult res = VK_ERROR_INITIALIZATION_FAILED;
+
+    do
     {
-        vkDestroyShaderModule(s_specDevice, s_vertex_shader_module, NULL);
-        s_vertex_shader_module = VK_NULL_HANDLE;
+        if (!CreateShaderModule(taskSPVFilePath, &taskShaderModule)) break;
+        if (!CreateShaderModule(meshSPVFilePath, &meshShaderModule)) break;
+        if (!CreateShaderModule(fragmentSPVFilePath, &fragmentShaderModule)) break;
+
+        const struct SpecializationConstants
+        {
+            uint32_t local_size_x;
+            uint32_t payload_data_count;
+        } specConsts = { 128U, 1024U };
+
+        const VkSpecializationMapEntry mapEntries[] = {
+            {
+                .constantID = 0,
+                .offset = (uint32_t)offsetof(struct SpecializationConstants, local_size_x),
+                .size = sizeof(specConsts.local_size_x)
+            },
+            {
+                .constantID = 1,
+                .offset = (uint32_t)offsetof(struct SpecializationConstants, payload_data_count),
+                .size = sizeof(specConsts.payload_data_count)
+            }
+        };
+
+        const VkSpecializationInfo specializationInfo = {
+            .mapEntryCount = (uint32_t)(sizeof(mapEntries) / sizeof(mapEntries[0])),
+            .pMapEntries = mapEntries,
+            .dataSize = sizeof(specConsts),
+            .pData = &specConsts
+        };
+
+        // All three shader stages
+        const VkPipelineShaderStageCreateInfo shaderStages[] = {
+            // task shader
+            {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = NULL,
+                .flags = 0,
+                .stage = VK_SHADER_STAGE_TASK_BIT_EXT,
+                .module = taskShaderModule,
+                .pName = "main",
+                .pSpecializationInfo = &specializationInfo
+            },
+            // mesh shader
+            {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = NULL,
+                .flags = 0,
+                .stage = VK_SHADER_STAGE_MESH_BIT_EXT,
+                .module = meshShaderModule,
+                .pName = "main",
+                .pSpecializationInfo = &specializationInfo
+            },
+            // fragment shader
+            {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = NULL,
+                .flags = 0,
+                .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+                .module = fragmentShaderModule,
+                .pName = "main",
+                .pSpecializationInfo = NULL
+            }
+        };
+
+        const VkPipelineViewportStateCreateInfo viewportStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .viewportCount = 1,
+            .pViewports = NULL,     // As the viewport state is dynamic, this member is ignored.
+            .scissorCount = 1,
+            .pScissors = NULL       // As the scissor state is dynamic, this member is ignored.
+        };
+
+        const VkPipelineRasterizationStateCreateInfo rasterizationStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .depthClampEnable = VK_FALSE,
+            .rasterizerDiscardEnable = VK_FALSE,
+            .polygonMode = VK_POLYGON_MODE_FILL,
+            // Index 0 square rotates about the x-axis so that the back face should not be culled.
+            .cullMode = VK_CULL_MODE_BACK_BIT,
+            .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+            .depthBiasEnable = VK_FALSE,
+            .depthBiasConstantFactor = 0.0f,
+            .depthBiasClamp = 1.0f,
+            .depthBiasSlopeFactor = 0.0f,
+            .lineWidth = 1.0f,
+        };
+
+        const VkPipelineMultisampleStateCreateInfo multisampleStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+            .sampleShadingEnable = VK_FALSE,
+            .minSampleShading = 0.0f,
+            .pSampleMask = NULL,
+            .alphaToCoverageEnable = VK_FALSE,
+            .alphaToOneEnable = VK_FALSE
+        };
+
+        const VkStencilOpState stencilOpState = {
+            .failOp = VK_STENCIL_OP_KEEP,
+            .passOp = VK_STENCIL_OP_KEEP,
+            .depthFailOp = VK_STENCIL_OP_KEEP,
+            .compareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+            .compareMask = 0,
+            .writeMask = 0,
+            .reference = 0
+        };
+
+        const VkPipelineDepthStencilStateCreateInfo depthStencilStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .depthTestEnable = VK_TRUE,
+            .depthWriteEnable = VK_TRUE,
+            .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+            .depthBoundsTestEnable = VK_FALSE,
+            .stencilTestEnable = VK_FALSE,
+            .front = stencilOpState,
+            .back = stencilOpState,
+            .minDepthBounds = 0.0f,
+            .maxDepthBounds = 0.0f
+        };
+
+        const VkPipelineColorBlendAttachmentState attatchmentStates[1] = {
+            {
+                .blendEnable = VK_FALSE,
+                .srcColorBlendFactor = VK_BLEND_FACTOR_ZERO,
+                .dstColorBlendFactor = VK_BLEND_FACTOR_ZERO,
+                .colorBlendOp = VK_BLEND_OP_ADD,
+                .srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+                .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+                .alphaBlendOp = VK_BLEND_OP_ADD,
+                .colorWriteMask = 0x0fU
+            }
+        };
+
+        const VkPipelineColorBlendStateCreateInfo colorBlendStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .logicOpEnable = VK_FALSE,
+            .logicOp = VK_LOGIC_OP_CLEAR,
+            .attachmentCount = (uint32_t)(sizeof(attatchmentStates) / sizeof(attatchmentStates[0])),
+            .pAttachments = attatchmentStates,
+            .blendConstants = { 0.0f }
+        };
+
+        const VkPipelineDynamicStateCreateInfo dynamicStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .dynamicStateCount = DYNAMIC_STATE_COUNT,
+            .pDynamicStates = (VkDynamicState[]) { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR }
+        };
+
+        const VkGraphicsPipelineCreateInfo pipelineCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = NULL,
+            .stageCount = (uint32_t)(sizeof(shaderStages) / sizeof(shaderStages[0])),
+            .pStages = shaderStages,
+            .pVertexInputState = NULL,
+            .pInputAssemblyState = NULL,
+            .pTessellationState = NULL,
+            .pViewportState = &viewportStateCreateInfo,
+            .pRasterizationState = &rasterizationStateCreateInfo,
+            .pMultisampleState = &multisampleStateCreateInfo,
+            .pDepthStencilState = &depthStencilStateCreateInfo,
+            .pColorBlendState = &colorBlendStateCreateInfo,
+            .pDynamicState = &dynamicStateCreateInfo,
+            .layout = s_pipelineLayout,
+            .renderPass = s_render_pass,
+            .subpass = 0,
+            .basePipelineHandle = VK_NULL_HANDLE,
+            .basePipelineIndex = 0
+        };
+
+        const VkPipelineCacheCreateInfo pipelineCache = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .initialDataSize = 0,
+            .pInitialData = NULL
+        };
+
+        VkResult res = vkCreatePipelineCache(s_specDevice, &pipelineCache, NULL, &s_pipelineCaches[index]);
+        if (res != VK_SUCCESS)
+        {
+            printf("vkCreatePipelineCache failed: %d\n", res);
+            return false;
+        }
+
+        res = vkCreateGraphicsPipelines(s_specDevice, s_pipelineCaches[index], 1, &pipelineCreateInfo, NULL, &s_pipelines[index]);
+        if (res != VK_SUCCESS)
+        {
+            printf("vkCreateGraphicsPipelines failed: %d\n", res);
+            return false;
+        }
     }
-    if (s_geometry_shader_module != VK_NULL_HANDLE)
-    {
-        vkDestroyShaderModule(s_specDevice, s_geometry_shader_module, NULL);
-        s_geometry_shader_module = VK_NULL_HANDLE;
+    while (false);
+    
+    if (taskShaderModule != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(s_specDevice, taskShaderModule, NULL);
     }
-    if (s_fragment_shader_module != VK_NULL_HANDLE)
-    {
-        vkDestroyShaderModule(s_specDevice, s_fragment_shader_module, NULL);
-        s_fragment_shader_module = VK_NULL_HANDLE;
+    if (meshShaderModule != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(s_specDevice, meshShaderModule, NULL);
+    }
+    if (fragmentShaderModule != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(s_specDevice, fragmentShaderModule, NULL);
     }
 
     return true;
@@ -2235,6 +2586,13 @@ static bool RecordCommandsForDraw(VkCommandBuffer inputCmdBuf, uint32_t swapchai
     // Draw the geometry shader test primitives
     vkCmdBindPipeline(inputCmdBuf, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipelines[2]);
     vkCmdDraw(inputCmdBuf, 1, 1, 0, 0);
+
+    if (s_pipelines[3] != VK_NULL_HANDLE && dyn_vkCmdDrawMeshTasksEXT != NULL)
+    {
+        // Dispatch task shader
+        vkCmdBindPipeline(inputCmdBuf, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipelines[3]);
+        dyn_vkCmdDrawMeshTasksEXT(inputCmdBuf, 1U, 1U, 1U);
+    }
 
     // End the occlusion query
     vkCmdEndQuery(inputCmdBuf, s_occlusionQueryPool, swapchainIndex);
@@ -2641,15 +2999,6 @@ static void DestroyVulkanAssets(void)
             vkDestroyPipeline(s_specDevice, s_pipelines[i], NULL);
         }
     }
-    if (s_vertex_shader_module != VK_NULL_HANDLE) {
-        vkDestroyShaderModule(s_specDevice, s_vertex_shader_module, NULL);
-    }
-    if (s_geometry_shader_module != VK_NULL_HANDLE) {
-        vkDestroyShaderModule(s_specDevice, s_geometry_shader_module, NULL);
-    }
-    if (s_fragment_shader_module != VK_NULL_HANDLE) {
-        vkDestroyShaderModule(s_specDevice, s_fragment_shader_module, NULL);
-    }
     if (s_render_pass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(s_specDevice, s_render_pass, NULL);
     }
@@ -2908,6 +3257,9 @@ int main(int argc, const char* const argv[])
         if (!CreateGraphicsPipeline("shaders/flatten.vert.spv", "shaders/flatten.frag.spv", NULL, 0)) break;
         if (!CreateGraphicsPipeline("shaders/gradient.vert.spv", "shaders/gradient.frag.spv", NULL, 1)) break;
         if (!CreateGraphicsPipeline("shaders/geomtest.vert.spv", "shaders/geomtest.frag.spv", "shaders/geomtest.geom.spv", 2)) break;
+        if (dyn_vkCmdDrawMeshTasksEXT != NULL) {
+            if (!CreateMeshShaderGraphicsPipeline("shaders/basic_ms.task.spv", "shaders/basic_ms.mesh.spv", "shaders/basic_ms.frag.spv", 3)) break;
+        }
         if (!CreateDescriptorPoolAndSet()) break;
         if (!CreateFramebuffers()) break;
         
@@ -2936,7 +3288,8 @@ int main(int argc, const char* const argv[])
         {
             done = true;  // if found, quit app
         }
-        else {
+        else
+        {
             // Translate and dispatch to event queue
             TranslateMessage(&msg);
             DispatchMessageA(&msg);

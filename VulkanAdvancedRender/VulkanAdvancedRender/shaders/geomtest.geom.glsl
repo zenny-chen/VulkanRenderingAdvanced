@@ -10,9 +10,9 @@ layout(location = 0) in VS_OUT
     flat lowp vec4 fragColor;
 } gsIn[];
 
-layout(location = 0) flat out lowp vec4 outFragColor;
+layout(location = 0) out flat lowp vec4 outFragColor;
 
-void main(void)
+void main()
 {
     const vec4 srcInPos = gl_in[0].gl_Position;
     const lowp vec4 dstColor = gsIn[0].fragColor;
@@ -45,3 +45,4 @@ void main(void)
 
     EndPrimitive();
 }
+

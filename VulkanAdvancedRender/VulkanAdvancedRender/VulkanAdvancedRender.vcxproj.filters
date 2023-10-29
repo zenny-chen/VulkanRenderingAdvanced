@@ -47,5 +47,14 @@
     <None Include="shaders\gradient.vert.glsl">
       <Filter>资源文件\shaders</Filter>
     </None>
+    <None Include="shaders\basic_ms.mesh.glsl">
+      <Filter>资源文件\shaders</Filter>
+    </None>
+    <None Include="shaders\basic_ms.task.glsl">
+      <Filter>资源文件\shaders</Filter>
+    </None>
+    <None Include="shaders\basic_ms.frag.glsl">
+      <Filter>资源文件\shaders</Filter>
+    </None>
   </ItemGroup>
 </Project>

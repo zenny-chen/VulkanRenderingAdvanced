@@ -40,7 +40,7 @@ layout(std430, set = 0, binding = 0, scalar) uniform transform_block {
  * |(x, y, z)| must be 1.0
 */
 
-void main(void)
+void main()
 {
     const float offset = -0.55f;
     // glTranslate(offset, -offset, -2.3, 1.0)
@@ -59,7 +59,9 @@ void main(void)
         0.0f, 0.0f, 0.0f, 1.0f                     // column 3
     );
 
+    // glOrtho(left, right, bottom, top, near, far) and here uses:
     // glOrtho(-u_factor.x, u_factor.x, -u_factor.y, u_factor.y, 1.0, 3.0)
+    // Here upside down the bottom and top to make the front face as counter-clockwise
     mat4 projectionMatrix = mat4(1.0f / trans_consts.u_factor.x, 0.0f, 0.0f, 0.0f,  // column 0
         0.0f, 1.0f / trans_consts.u_factor.y, 0.0f, 0.0f,  // column 1
         0.0f, 0.0f, -1.0f, -2.0f,                          // column 2
@@ -70,3 +72,4 @@ void main(void)
     
     vs_out.fragColor = inColor;
 }
+
