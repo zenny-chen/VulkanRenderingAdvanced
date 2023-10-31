@@ -626,7 +626,7 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
         s_maxMeshSharedMemorySize = meshShaderProps.maxMeshSharedMemorySize;
         printf("In mesh shader, max shared memory size: %uKB\n", s_maxMeshSharedMemorySize / 1024U);
         s_maxMeshPayloadAndSharedMemorySize = meshShaderProps.maxMeshPayloadAndSharedMemorySize;
-        printf("In mesh shader, max payload and shared memory size: %uKB\n", s_maxMeshPayloadAndSharedMemorySize);
+        printf("In mesh shader, max payload and shared memory size: %uKB\n", s_maxMeshPayloadAndSharedMemorySize / 1024U);
         s_maxMeshOutputMemorySize = meshShaderProps.maxMeshOutputMemorySize;
         printf("In mesh shader, max output memory size: %uKB\n", s_maxMeshOutputMemorySize / 1024U);
         s_maxMeshPayloadAndOutputMemorySize = meshShaderProps.maxMeshPayloadAndOutputMemorySize;
