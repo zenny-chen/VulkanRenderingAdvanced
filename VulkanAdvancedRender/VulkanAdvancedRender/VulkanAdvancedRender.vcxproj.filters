@@ -56,5 +56,11 @@
     <None Include="shaders\basic_ms.frag.glsl">
       <Filter>资源文件\shaders</Filter>
     </None>
+    <None Include="shaders\fsr.frag.glsl">
+      <Filter>资源文件\shaders</Filter>
+    </None>
+    <None Include="shaders\fsr.vert.glsl">
+      <Filter>资源文件\shaders</Filter>
+    </None>
   </ItemGroup>
 </Project>

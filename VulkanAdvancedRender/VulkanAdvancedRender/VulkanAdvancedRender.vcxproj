@@ -147,6 +147,8 @@
     <None Include="shaders\basic_ms.task.glsl" />
     <None Include="shaders\flatten.frag.glsl" />
     <None Include="shaders\flatten.vert.glsl" />
+    <None Include="shaders\fsr.frag.glsl" />
+    <None Include="shaders\fsr.vert.glsl" />
     <None Include="shaders\geomtest.frag.glsl" />
     <None Include="shaders\geomtest.geom.glsl" />
     <None Include="shaders\geomtest.vert.glsl" />

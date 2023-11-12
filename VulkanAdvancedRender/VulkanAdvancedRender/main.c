@@ -150,8 +150,10 @@ static uint32_t s_maxMeshOutputPrimitives = 0U;
 static uint32_t s_maxMeshOutputLayers = 0U;
 static uint32_t s_maxPreferredTaskWorkGroupInvocations = 0U;
 static uint32_t s_maxPreferredMeshWorkGroupInvocations = 0U;
+static bool s_supportFragmentShadingRate = false;
 
 static bool s_isRenderPrepared = false;
+static bool s_isRotating = true;
 static float s_currRorationDegree = 0.0f;
 static float s_gpuTimestampPeriod = 0.0f;
 static double s_currGPUDuration = 0.0;
@@ -539,6 +541,12 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
             availExtensionNames[availExtensionCount++] = currExtName;
             continue;
         }
+        if (strcmp(currExtName, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME) == 0)
+        {
+            s_supportFragmentShadingRate = true;
+            availExtensionNames[availExtensionCount++] = currExtName;
+            continue;
+        }
     }
 
     const char* notStr = "is";
@@ -578,6 +586,12 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
     printf("%s feature %s supported!\n", VK_EXT_MESH_SHADER_EXTENSION_NAME, notStr);
     notStr = "is";
 
+    if (!s_supportFragmentShadingRate) {
+        notStr = "not";
+    }
+    printf("%s feature %s supported!\n", VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, notStr);
+    notStr = "is";
+
     printf("Available required device extension count: %u\n\n", availExtensionCount);
 
     // Query detail driver info
@@ -592,10 +606,15 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
         .pNext = &driverProps
     };
 
+    VkPhysicalDeviceFragmentShadingRatePropertiesKHR fragmentShadingRateProps = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR,
+        .pNext = &meshShaderProps
+    };
+
     VkPhysicalDeviceProperties2 properties2 = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
         // link to driverProps
-        .pNext = &meshShaderProps
+        .pNext = &fragmentShadingRateProps
     };
 
     // Query all above properties
@@ -640,6 +659,25 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
         s_maxMeshOutputLayers = meshShaderProps.maxMeshOutputLayers;
         printf("In mesh shader, max output layer count: %u\n", s_maxMeshOutputLayers);
     }
+    if (s_supportFragmentShadingRate)
+    {
+        printf("min fragment shading rate attachment texel size -- width: %u, height: %u\n", fragmentShadingRateProps.minFragmentShadingRateAttachmentTexelSize.width, fragmentShadingRateProps.minFragmentShadingRateAttachmentTexelSize.height);
+        printf("max fragment shading rate attachment texel size -- width: %u, height: %u\n", fragmentShadingRateProps.maxFragmentShadingRateAttachmentTexelSize.width, fragmentShadingRateProps.maxFragmentShadingRateAttachmentTexelSize.height);
+        printf("max fragment shading rate attachment texel size aspect ratio: %u\n", fragmentShadingRateProps.maxFragmentShadingRateAttachmentTexelSizeAspectRatio);
+        printf("support layered shading rate attachments? %s\n", fragmentShadingRateProps.layeredShadingRateAttachments != VK_FALSE ? "YES" : "NO");
+        printf("support fragment shading rate non trivial combiner ops? %s\n", fragmentShadingRateProps.fragmentShadingRateNonTrivialCombinerOps != VK_FALSE ? "YES" : "NO");
+        printf("max fragment size -- width: %u, height: %u\n", fragmentShadingRateProps.maxFragmentSize.width, fragmentShadingRateProps.maxFragmentSize.height);
+        printf("max fragment size aspect ratio: %u\n", fragmentShadingRateProps.maxFragmentSizeAspectRatio);
+        printf("max fragment shading rate coverage samples: %u\n", fragmentShadingRateProps.maxFragmentShadingRateCoverageSamples);
+        printf("max fragment shading rate rasterization samples: %u\n", fragmentShadingRateProps.maxFragmentShadingRateRasterizationSamples);
+        printf("support fragment shading rate with shader depth stencil writes? %s\n", fragmentShadingRateProps.fragmentShadingRateWithShaderDepthStencilWrites != VK_FALSE ? "YES" : "NO");
+        printf("support fragment shading rate with sample mask? %s\n", fragmentShadingRateProps.fragmentShadingRateWithSampleMask != VK_FALSE ? "YES" : "NO");
+        printf("support fragment shading rate with shader sample mask? %s\n", fragmentShadingRateProps.fragmentShadingRateWithShaderSampleMask != VK_FALSE ? "YES" : "NO");
+        printf("support fragment shading rate with conservative rasterization? %s\n", fragmentShadingRateProps.fragmentShadingRateWithConservativeRasterization != VK_FALSE ? "YES" : "NO");
+        printf("support fragment shading rate with fragment shader inter-lock? %s\n", fragmentShadingRateProps.fragmentShadingRateWithFragmentShaderInterlock != VK_FALSE ? "YES" : "NO");
+        printf("support fragment shading rate with custom sample locations? %s\n", fragmentShadingRateProps.maxFragmentShadingRateCoverageSamples != VK_FALSE ? "YES" : "NO");
+        printf("support fragment shading rate strict multipy combiner? %s\n", fragmentShadingRateProps.fragmentShadingRateStrictMultiplyCombiner != VK_FALSE ? "YES" : "NO");
+    }
 
     s_gpuTimestampPeriod = properties2.properties.limits.timestampPeriod;
 
@@ -654,11 +692,16 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
         .pNext = &scalarBlockLayoutFeature
     };
 
+    VkPhysicalDeviceFragmentShadingRateFeaturesKHR fragmentShadingRateFeature = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR,
+        .pNext = &meshShaderFeature
+    };
+
     // physical device feature 2
     VkPhysicalDeviceFeatures2 features2 = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
         // link to subgroupSizeControlFeature node
-        .pNext = &meshShaderFeature
+        .pNext = &fragmentShadingRateFeature
     };
 
     // Query all above features
@@ -675,9 +718,15 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
         printf("Current device supports primitive fragment shading rate mesh shader? %s\n", meshShaderFeature.primitiveFragmentShadingRateMeshShader == VK_FALSE ? "NO" : "YES");
         printf("Current device supports mesh shader queries? %s\n", meshShaderFeature.meshShaderQueries == VK_FALSE ? "NO" : "YES");
     }
-
     if (supportMeshShader && supportSPIRV1_4 && meshShaderFeature.taskShader != VK_FALSE && meshShaderFeature.meshShader != VK_FALSE) {
         dyn_vkCmdDrawMeshTasksEXT = (PFN_vkCmdDrawMeshTasksEXT)vkGetInstanceProcAddr(s_instance, "vkCmdDrawMeshTasksEXT");
+    }
+
+    if (s_supportFragmentShadingRate)
+    {
+        printf("Current device support pipeline fragment shading rate? %s\n", fragmentShadingRateFeature.pipelineFragmentShadingRate != VK_FALSE ? "YES" : "NO");
+        printf("Current device support primitvie fragment shading rate? %s\n", fragmentShadingRateFeature.primitiveFragmentShadingRate != VK_FALSE ? "YES" : "NO");
+        printf("Current device support attachment fragment shading rate? %s\n", fragmentShadingRateFeature.attachmentFragmentShadingRate != VK_FALSE ? "YES" : "NO");
     }
 
     const float queue_priorities[1] = { 0.0f };
@@ -2039,7 +2088,7 @@ static bool CreateGraphicsPipeline(const char* vertSPVFilePath, const char* frag
             .depthClampEnable = VK_FALSE,
             .rasterizerDiscardEnable = VK_FALSE,
             .polygonMode = VK_POLYGON_MODE_FILL,
-            // Index 1 and 2 squares rotate about the y-axis and x-axis separately so that the back face should not be culled.
+            // Index 0 and 1 squares rotate around the y-axis and x-axis separately so that the back face should not be culled.
             .cullMode = index == 2 ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE,
             .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
             .depthBiasEnable = VK_FALSE,
@@ -2118,9 +2167,16 @@ static bool CreateGraphicsPipeline(const char* vertSPVFilePath, const char* frag
             .pDynamicStates = (VkDynamicState[]) { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR }
         };
 
+        const VkPipelineFragmentShadingRateStateCreateInfoKHR fragmentShadingRateStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR,
+            .pNext = NULL,
+            .fragmentSize = { .width = 2, .height = 2 },
+            .combinerOps = { [0] = VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MUL_KHR, [1] = VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR }
+        };
+
         const VkGraphicsPipelineCreateInfo pipelineCreateInfo = {
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-            .pNext = NULL,
+            .pNext = (index == 0 && s_supportFragmentShadingRate) ? &fragmentShadingRateStateCreateInfo : NULL,
             .stageCount = stageCount,
             .pStages = shaderStages,
             .pVertexInputState = &vertexInputStateCreateInfo,
@@ -2176,8 +2232,10 @@ static bool CreateGraphicsPipeline(const char* vertSPVFilePath, const char* frag
     return res == VK_SUCCESS;
 }
 
-static bool CreateMeshShaderGraphicsPipeline(const char* taskSPVFilePath, const char* meshSPVFilePath, const char* fragmentSPVFilePath, int index)
+static bool CreateMeshShaderGraphicsPipeline(const char* taskSPVFilePath, const char* meshSPVFilePath, const char* fragmentSPVFilePath)
 {
+    enum { index = 3 };
+
     VkShaderModule taskShaderModule = VK_NULL_HANDLE;
     VkShaderModule meshShaderModule = VK_NULL_HANDLE;
     VkShaderModule fragmentShaderModule = VK_NULL_HANDLE;
@@ -2266,8 +2324,7 @@ static bool CreateMeshShaderGraphicsPipeline(const char* taskSPVFilePath, const 
             .depthClampEnable = VK_FALSE,
             .rasterizerDiscardEnable = VK_FALSE,
             .polygonMode = VK_POLYGON_MODE_FILL,
-            // Index 0 square rotates about the x-axis so that the back face should not be culled.
-            .cullMode = VK_CULL_MODE_BACK_BIT,
+            .cullMode = VK_CULL_MODE_BACK_BIT,  // rotate around z axis, so back faces can be culled
             .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
             .depthBiasEnable = VK_FALSE,
             .depthBiasConstantFactor = 0.0f,
@@ -2734,6 +2791,8 @@ static bool FlushInitCommand(void)
 
 static bool UpdateUniformData(int currImageIndex)
 {
+    if (!s_isRotating) return true;
+
     const size_t srcOffset = sizeof(s_vertex_coords_data) + sizeof(s_vertex_color_data);
 
     FlattenVertexUniform* hostUniformData = NULL;
@@ -3154,6 +3213,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         case VK_RIGHT:
             break;
         case VK_SPACE:
+        case VK_RETURN:
+            s_isRotating = !s_isRotating;
             break;
         }
         return 0;
@@ -3254,11 +3315,14 @@ int main(int argc, const char* const argv[])
         if (!CreateDepthReource()) break;
         if (!CreateDescriptorSetAndPipelineLayout()) break;
         if (!CreateRenderPass()) break;
-        if (!CreateGraphicsPipeline("shaders/flatten.vert.spv", "shaders/flatten.frag.spv", NULL, 0)) break;
+        
+        const char* vsSPV = s_supportFragmentShadingRate ? "shaders/fsr.vert.spv" : "shaders/flatten.vert.spv";
+        const char* fsSPV = s_supportFragmentShadingRate ? "shaders/fsr.frag.spv" : "shaders/flatten.frag.spv";
+        if (!CreateGraphicsPipeline(vsSPV, fsSPV, NULL, 0)) break;
         if (!CreateGraphicsPipeline("shaders/gradient.vert.spv", "shaders/gradient.frag.spv", NULL, 1)) break;
         if (!CreateGraphicsPipeline("shaders/geomtest.vert.spv", "shaders/geomtest.frag.spv", "shaders/geomtest.geom.spv", 2)) break;
         if (dyn_vkCmdDrawMeshTasksEXT != NULL) {
-            if (!CreateMeshShaderGraphicsPipeline("shaders/basic_ms.task.spv", "shaders/basic_ms.mesh.spv", "shaders/basic_ms.frag.spv", 3)) break;
+            if (!CreateMeshShaderGraphicsPipeline("shaders/basic_ms.task.spv", "shaders/basic_ms.mesh.spv", "shaders/basic_ms.frag.spv")) break;
         }
         if (!CreateDescriptorPoolAndSet()) break;
         if (!CreateFramebuffers()) break;
