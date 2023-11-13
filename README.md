@@ -11,3 +11,24 @@ The official Vulkan SDK for Windows is here: https://vulkan.lunarg.com/sdk/home#
 
 It is also convenient to be ported to other platforms, such as Android and other Linux operating systems. If GCC or Clang is used, just use **`-std=gnu2x`** option.
 
+<br />
+
+# GTX 1650 Fragment Shading Rate Combiner Operation
+
+<br />
+
+## Combining shading rate factors (width x height) with VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MUL_KHR
+
+A/B |	1x1 |	1x2 | 1x4 |	2x1 |	2x2 |	2x4 | 4x1 |	4x2 |	4x4
+---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ----
+1x1 | 1x1 | 1x2 | 1x2 | 2x1 | 2x2 | 2x4 | 2x1 | 4x2 | 4x4
+1x2 | 1x2 | 1x2 | 1x2 | 2x2 | 2x4 | 2x4 | 4x2 | 4x4 | 4x4
+1x4 | 1x2 | 1x2 | 1x2 | 2x4 | 2x4 | 2x4 | 4x4 | 4x4 | 4x4
+2x1 | 2x1 | 2x2 | 2x4 | 2x1 | 4x2 | 4x4 | 2x1 | 4x2 | 4x4
+2x2 | 2x2 | 2x4 | 2x4 | 4x2 | 4x4 | 4x4 | 4x2 | 4x4 | 4x4
+2x4 | 2x4 | 2x4 | 2x4 | 4x4 | 4x4 | 4x4 | 4x4 | 4x4 | 4x4
+4x1 | 2x1 | 4x2 | 4x4 | 2x1 | 4x2 | 4x4 | 2x1 | 4x2 | 4x4
+4x2 | 4x2 | 4x4 | 4x4 | 4x2 | 4x4 | 4x4 | 4x2 | 4x4 | 4x4
+4x4 | 4x4 | 4x4 | 4x4 | 4x4 | 4x4 | 4x4 | 4x4 | 4x4 | 4x4
+
+
