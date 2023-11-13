@@ -70,6 +70,6 @@ void main()
     
     fragColor = inColor;
 
-    gl_PrimitiveShadingRateEXT = gl_ShadingRateFlag2HorizontalPixelsEXT | gl_ShadingRateFlag2VerticalPixelsEXT;
+    gl_PrimitiveShadingRateEXT = gl_ShadingRateFlag2HorizontalPixelsEXT | gl_ShadingRateFlag4VerticalPixelsEXT;
 }
 

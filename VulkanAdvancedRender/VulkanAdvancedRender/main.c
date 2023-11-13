@@ -2170,7 +2170,7 @@ static bool CreateGraphicsPipeline(const char* vertSPVFilePath, const char* frag
         const VkPipelineFragmentShadingRateStateCreateInfoKHR fragmentShadingRateStateCreateInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR,
             .pNext = NULL,
-            .fragmentSize = { .width = 2, .height = 2 },
+            .fragmentSize = { .width = 1, .height = 4 },
             .combinerOps = { [0] = VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MUL_KHR, [1] = VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR }
         };
 
