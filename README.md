@@ -36,6 +36,8 @@ A/B |	1x1 |	1x2 | 1x4 |	2x1 |	2x2 |	2x4 | 4x1 |	4x2 |	4x4
 ## Algorithm
 
 ```cpp
+// [3:2] -- FSR width
+// [1:0] -- FSR height
 enum VK_SPV_SHADING_RATE
 {
     fsrPixelSize1x1 = 0,
