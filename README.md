@@ -36,6 +36,19 @@ A/B |	1x1 |	1x2 | 1x4 |	2x1 |	2x2 |	2x4 | 4x1 |	4x2 |	4x4
 ## Algorithm
 
 ```cpp
+enum VK_SPV_SHADING_RATE
+{
+    fsrPixelSize1x1 = 0,
+    fsrPixelSize1x2 = 1,
+    fsrPixelSize1x4 = 2,
+    fsrPixelSize2x1 = 4,
+    fsrPixelSize2x2 = 5,
+    fsrPixelSize2x4 = 6,
+    fsrPixelSize4x1 = 8,
+    fsrPixelSize4x2 = 9,
+    fsrPixelSize4x4 = 10
+};
+
 VkExtent2D MULcombiner(VkExtent2D a, VkExtent2D b)
 {
     VkExtent2D c;
