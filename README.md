@@ -31,4 +31,36 @@ A/B |	1x1 |	1x2 | 1x4 |	2x1 |	2x2 |	2x4 | 4x1 |	4x2 |	4x4
 4x2 | 4x2 | 4x4 | 4x4 | 4x2 | 4x4 | 4x4 | 4x2 | 4x4 | 4x4
 4x4 | 4x4 | 4x4 | 4x4 | 4x4 | 4x4 | 4x4 | 4x4 | 4x4 | 4x4
 
+<br />
+
+## Algorithm
+
+```cpp
+VkExtent2D MULcombiner(VkExtent2D a, VkExtent2D b)
+{
+    VkExtent2D c;
+    c.width = a.width * b.width;
+    c.height = a.height * b.height;
+
+    if (c.width > 4) {
+        c.width = 4;
+    }
+    if (c.height > 4) {
+        c.height = 4;
+    }
+
+    if (maxFragmentShadingRateAttachmentTexelSizeAspectRatio == 2)
+    {
+        // In this case, 4x1 will be clamped to 2x1, and 1x4 will be clamped to 1x2
+        if (c.width == 4 && c.height == 1) {
+            c.width = 2;
+        }
+        if (c.width == 1 && c.height == 4) {
+            c.height = 2;
+        }
+    }
+
+    return c;
+}
+```
 
