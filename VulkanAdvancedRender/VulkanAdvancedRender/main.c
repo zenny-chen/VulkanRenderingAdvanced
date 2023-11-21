@@ -50,6 +50,8 @@ static inline FILE* GeneralOpenFile(const char* path)
 #include <math.h>
 
 
+#define USE_MSAA_RENDER_TARGET      4
+
 enum MY_CONSTANTS
 {
     MAX_VULKAN_LAYER_COUNT = 64,
@@ -74,6 +76,8 @@ typedef struct SwapchainImageResources
     VkCommandBuffer cmd_buf;
     VkCommandBuffer graphics_to_present_cmd_buf;
     VkImageView view;
+    VkImage msaaRenderTarget;
+    VkImageView msaaRenderTargetImageView;
     VkBuffer coords_buffer;
     VkBuffer color_buffer;
     VkBuffer uniform_buffer;
@@ -124,6 +128,7 @@ static VkQueryPool s_timestampQueryPool = VK_NULL_HANDLE;
 static VkQueryPool s_occlusionQueryPool = VK_NULL_HANDLE;
 static VkBuffer s_hostVertexAndUniformBuffer = VK_NULL_HANDLE;
 static VkDeviceMemory s_hostVertexUniformMemory = VK_NULL_HANDLE;
+static VkDeviceMemory s_msaaImageMemory = VK_NULL_HANDLE;
 static VkDescriptorSetLayout s_descSetLayout = VK_NULL_HANDLE;
 static VkPipelineLayout s_pipelineLayout = VK_NULL_HANDLE;
 static VkRenderPass s_render_pass = VK_NULL_HANDLE;
@@ -404,6 +409,18 @@ static bool InitializeVulkanInstance(const char *appName, const char *engineName
     return result == VK_SUCCESS;
 }
 
+static inline unsigned GetSupportedMaxSampleCount(VkSampleCountFlags sampleCount)
+{
+    if ((sampleCount & VK_SAMPLE_COUNT_64_BIT) != 0) return 64U;
+    if ((sampleCount & VK_SAMPLE_COUNT_32_BIT) != 0) return 32U;
+    if ((sampleCount & VK_SAMPLE_COUNT_16_BIT) != 0) return 16U;
+    if ((sampleCount & VK_SAMPLE_COUNT_8_BIT) != 0) return 8U;
+    if ((sampleCount & VK_SAMPLE_COUNT_4_BIT) != 0) return 4U;
+    if ((sampleCount & VK_SAMPLE_COUNT_2_BIT) != 0) return 2U;
+
+    return 1U;
+}
+
 // Return the queue family count
 static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
 {
@@ -621,6 +638,18 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
     vkGetPhysicalDeviceProperties2(s_currPhysicalDevice, &properties2);
 
     printf("Detail driver info: %s %s\n", driverProps.driverName, driverProps.driverInfo);
+
+    VkSampleCountFlags maxSampleCount = properties2.properties.limits.framebufferColorSampleCounts;
+    printf("Max supported color sample count: %u\n", GetSupportedMaxSampleCount(maxSampleCount));
+
+    maxSampleCount = properties2.properties.limits.framebufferDepthSampleCounts;
+    printf("Max supported depth sample count: %u\n", GetSupportedMaxSampleCount(maxSampleCount));
+
+    maxSampleCount = properties2.properties.limits.framebufferStencilSampleCounts;
+    printf("Max supported stencil sample count: %u\n", GetSupportedMaxSampleCount(maxSampleCount));
+
+    maxSampleCount = properties2.properties.limits.framebufferNoAttachmentsSampleCounts;
+    printf("Max supported sample count for a subpass which uses no attachments: %u\n", GetSupportedMaxSampleCount(maxSampleCount));
 
     if (supportMeshShader)
     {
@@ -1103,7 +1132,7 @@ static bool CreateVulkanSwapchain(void)
         .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .queueFamilyIndexCount = 1,
-        .pQueueFamilyIndices = &s_specQueueFamilyIndex,
+        .pQueueFamilyIndices = (uint32_t[]){ s_specQueueFamilyIndex },
         .preTransform = preTransform,
         .compositeAlpha = compositeAlpha,
         .presentMode = swapchainPresentMode,
@@ -1140,6 +1169,27 @@ static bool CreateVulkanSwapchain(void)
         return false;
     }
 
+#if USE_MSAA_RENDER_TARGET
+    const VkImageCreateInfo imageCreateInfoStorage = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = s_surfaceFormat.format,
+        .extent = { swapchainExtent.width, swapchainExtent.height, 1U },
+        .mipLevels = 1U,
+        .arrayLayers = 1U,
+        .samples = USE_MSAA_RENDER_TARGET == 0 ? VK_SAMPLE_COUNT_1_BIT : USE_MSAA_RENDER_TARGET,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, // MSAA render target can be transient (memoryless) to hint using on-chip tile memory
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 1,
+        .pQueueFamilyIndices = (uint32_t[]){ s_specQueueFamilyIndex },
+        // The Vulkan spec states: initialLayout must be VK_IMAGE_LAYOUT_UNDEFINED or VK_IMAGE_LAYOUT_PREINITIALIZED
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+    };
+#endif
+
     for (uint32_t i = 0; i < s_swapchainImageCount; i++)
     {
         const VkImageViewCreateInfo swapchainImageView = {
@@ -1168,7 +1218,115 @@ static bool CreateVulkanSwapchain(void)
         }
 
         s_swapchainImageResources[i].image = swapchainImages[i];
+
+#if USE_MSAA_RENDER_TARGET
+        res = vkCreateImage(s_specDevice, &imageCreateInfoStorage, NULL, &s_swapchainImageResources[i].msaaRenderTarget);
+        if (res != VK_SUCCESS)
+        {
+            printf("vkCreateImage for storage image failed: %d\n", res);
+            return false;
+        }
+#endif
     }
+
+#if USE_MSAA_RENDER_TARGET
+    VkPhysicalDeviceMemoryProperties memoryProperties = { 0 };
+    vkGetPhysicalDeviceMemoryProperties(s_currPhysicalDevice, &memoryProperties);
+
+    VkMemoryRequirements imageMemBufRequirements = { 0 };
+    vkGetImageMemoryRequirements(s_specDevice, s_swapchainImageResources[0].msaaRenderTarget, &imageMemBufRequirements);
+    const size_t totoalDeviceMemSize = s_swapchainImageCount * (imageMemBufRequirements.size + imageMemBufRequirements.alignment);
+
+    // Find device local property memory type index
+    uint32_t memoryTypeIndex;
+    for (memoryTypeIndex = 0; memoryTypeIndex < memoryProperties.memoryTypeCount; memoryTypeIndex++)
+    {
+        if ((imageMemBufRequirements.memoryTypeBits & (1U << memoryTypeIndex)) == 0U) {
+            continue;
+        }
+        const VkMemoryType memoryType = memoryProperties.memoryTypes[memoryTypeIndex];
+        if ((memoryType.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 &&
+            (memoryType.propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0 &&    // firstly try Using lazily allocated property for transient memoryless MSAA render target
+            memoryProperties.memoryHeaps[memoryType.heapIndex].size >= totoalDeviceMemSize)
+        {
+            // found our memory type!
+            printf("Memoryless MSAA render target VRAM size: %zuMB\n", memoryProperties.memoryHeaps[memoryType.heapIndex].size / (1024U * 1024U));
+            break;
+        }
+    }
+    if (memoryTypeIndex == memoryProperties.memoryTypeCount)
+    {
+        puts("Current device does not support VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT...");
+
+        for (memoryTypeIndex = 0; memoryTypeIndex < memoryProperties.memoryTypeCount; memoryTypeIndex++)
+        {
+            if ((imageMemBufRequirements.memoryTypeBits & (1U << memoryTypeIndex)) == 0U) {
+                continue;
+            }
+            const VkMemoryType memoryType = memoryProperties.memoryTypes[memoryTypeIndex];
+            if ((memoryType.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 &&
+                memoryProperties.memoryHeaps[memoryType.heapIndex].size >= totoalDeviceMemSize)
+            {
+                // found our memory type!
+                printf("Memoryless MSAA render target VRAM size: %zuMB\n", memoryProperties.memoryHeaps[memoryType.heapIndex].size / (1024U * 1024U));
+                break;
+            }
+        }
+    }
+
+    const VkMemoryAllocateInfo deviceMemAllocInfo = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = NULL,
+        .allocationSize = totoalDeviceMemSize, // one memory buffer and one image buffer share the same device local memory.
+        .memoryTypeIndex = memoryTypeIndex
+    };
+    res = vkAllocateMemory(s_specDevice, &deviceMemAllocInfo, NULL, &s_msaaImageMemory);
+    if (res != VK_SUCCESS)
+    {
+        printf("vkAllocateMemory failed: %d\n", res);
+        return res;
+    }
+
+    for (uint32_t i = 0; i < s_swapchainImageCount; ++i)
+    {
+        VkDeviceSize offset = imageMemBufRequirements.size * i;
+        offset = (offset + (imageMemBufRequirements.alignment - 1)) & ~(imageMemBufRequirements.alignment - 1U);
+        res = vkBindImageMemory(s_specDevice, s_swapchainImageResources[i].msaaRenderTarget, s_msaaImageMemory, offset);
+        if (res != VK_SUCCESS)
+        {
+            printf("vkBindImageMemory failed: %d\n", res);
+            return res;
+        }
+
+        const VkImageViewCreateInfo imageViewCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .image = s_swapchainImageResources[i].msaaRenderTarget,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = s_surfaceFormat.format,
+            .components = {
+                .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+                .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+                .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+                .a = VK_COMPONENT_SWIZZLE_IDENTITY
+            },
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0U,
+                .levelCount = 1U,
+                .baseArrayLayer = 0U,
+                .layerCount = 1U
+            }
+        };
+        res = vkCreateImageView(s_specDevice, &imageViewCreateInfo, NULL, &s_swapchainImageResources[i].msaaRenderTargetImageView);
+        if (res != VK_SUCCESS)
+        {
+            printf("vkCreateImageView for sampled image failed: %d\n", res);
+            return false;
+        }
+    }
+#endif
 
     return true;
 }
@@ -1680,7 +1838,7 @@ static bool CreateDepthReource(void)
         .extent = { s_render_width, s_render_height, 1 },
         .mipLevels = 1,
         .arrayLayers = 1,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .samples = USE_MSAA_RENDER_TARGET == 0 ? VK_SAMPLE_COUNT_1_BIT : USE_MSAA_RENDER_TARGET,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
@@ -1828,6 +1986,19 @@ static bool CreateRenderPass(void)
     // the renderpass, no barriers are necessary.
     const VkAttachmentDescription attachments[] = {
         // color attachment
+#if USE_MSAA_RENDER_TARGET
+        {
+            .flags = 0,
+            .format = s_surfaceFormat.format,
+            .samples = USE_MSAA_RENDER_TARGET,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,    // used for rendering
+        },
+#else
         {
             .flags = 0,
             .format = s_surfaceFormat.format,
@@ -1837,13 +2008,14 @@ static bool CreateRenderPass(void)
             .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
             .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,     // used for presentation
         },
+#endif
         // depth attachment
         {
-            .format = s_depth_format,
             .flags = 0,
-            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .format = s_depth_format,
+            .samples = USE_MSAA_RENDER_TARGET == 0 ? VK_SAMPLE_COUNT_1_BIT : USE_MSAA_RENDER_TARGET,
             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
             .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
@@ -1851,15 +2023,35 @@ static bool CreateRenderPass(void)
             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
             .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         }
+#if USE_MSAA_RENDER_TARGET
+        ,
+        // color resolve attachment
+        {
+            .flags = 0,
+            .format = s_surfaceFormat.format,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,     // used for presentation
+        }
+#endif // USE_MSAA_RENDER_TARGET
     };
     const VkAttachmentReference color_reference = {
         .attachment = 0,
-        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
     };
     const VkAttachmentReference depth_reference = {
         .attachment = 1,
-        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
     };
+    const VkAttachmentReference color_resolve_reference = {
+        .attachment = 2,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+    };
+
     const VkSubpassDescription subpasses[1] = {
         {
             .flags = 0,
@@ -1868,7 +2060,7 @@ static bool CreateRenderPass(void)
             .pInputAttachments = NULL,
             .colorAttachmentCount = 1,
             .pColorAttachments = &color_reference,
-            .pResolveAttachments = NULL,
+            .pResolveAttachments = USE_MSAA_RENDER_TARGET == 0 ? NULL : &color_resolve_reference,
             .pDepthStencilAttachment = &depth_reference,
             .preserveAttachmentCount = 0,
             .pPreserveAttachments = NULL,
@@ -2102,7 +2294,7 @@ static bool CreateGraphicsPipeline(const char* vertSPVFilePath, const char* frag
             .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
             .pNext = NULL,
             .flags = 0,
-            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+            .rasterizationSamples = USE_MSAA_RENDER_TARGET == 0 ? VK_SAMPLE_COUNT_1_BIT : USE_MSAA_RENDER_TARGET,
             .sampleShadingEnable = VK_FALSE,
             .minSampleShading = 0.0f,
             .pSampleMask = NULL,
@@ -2337,7 +2529,7 @@ static bool CreateMeshShaderGraphicsPipeline(const char* taskSPVFilePath, const 
             .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
             .pNext = NULL,
             .flags = 0,
-            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+            .rasterizationSamples = USE_MSAA_RENDER_TARGET == 0 ? VK_SAMPLE_COUNT_1_BIT : USE_MSAA_RENDER_TARGET,
             .sampleShadingEnable = VK_FALSE,
             .minSampleShading = 0.0f,
             .pSampleMask = NULL,
@@ -2535,7 +2727,11 @@ static bool CreateDescriptorPoolAndSet(void)
 
 static bool CreateFramebuffers(void)
 {
+#if USE_MSAA_RENDER_TARGET
+    VkImageView attachments[] = { VK_NULL_HANDLE, s_depthResource.image_view, VK_NULL_HANDLE };
+#else
     VkImageView attachments[] = { VK_NULL_HANDLE, s_depthResource.image_view };
+#endif
 
     const VkFramebufferCreateInfo framebufferCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
@@ -2550,7 +2746,13 @@ static bool CreateFramebuffers(void)
 
     for (uint32_t i = 0; i < s_swapchainImageCount; ++i)
     {
+#if USE_MSAA_RENDER_TARGET
+        attachments[0] = s_swapchainImageResources[i].msaaRenderTargetImageView;
+        attachments[2] = s_swapchainImageResources[i].view;
+#else
         attachments[0] = s_swapchainImageResources[i].view;
+#endif
+
         VkResult res = vkCreateFramebuffer(s_specDevice, &framebufferCreateInfo, NULL, &s_swapchainImageResources[i].framebuffer);
         if (res != VK_SUCCESS)
         {
@@ -2587,6 +2789,9 @@ static bool RecordCommandsForDraw(VkCommandBuffer inputCmdBuf, uint32_t swapchai
     const VkClearValue clearValues[] = {
         { .color.float32 = { 0.4f, 0.5f, 0.4f, 1.0f } },
         { .depthStencil = { .depth = 1.0f, .stencil = 0 } },
+#if USE_MSAA_RENDER_TARGET
+        { .color.float32 = { 0.4f, 0.5f, 0.4f, 1.0f } }
+#endif
     };
     const VkRenderPassBeginInfo renderPassBeginInfo = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -3076,6 +3281,12 @@ static void DestroyVulkanAssets(void)
         if (s_swapchainImageResources[i].view != VK_NULL_HANDLE) {
             vkDestroyImageView(s_specDevice, s_swapchainImageResources[i].view, NULL);
         }
+        if (s_swapchainImageResources[i].msaaRenderTarget != VK_NULL_HANDLE) {
+            vkDestroyImage(s_specDevice, s_swapchainImageResources[i].msaaRenderTarget, NULL);
+        }
+        if (s_swapchainImageResources[i].msaaRenderTargetImageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(s_specDevice, s_swapchainImageResources[i].msaaRenderTargetImageView, NULL);
+        }
         if (s_swapchainImageResources[i].cmd_buf != VK_NULL_HANDLE) {
             vkFreeCommandBuffers(s_specDevice, s_commandPool, 1, &s_swapchainImageResources[i].cmd_buf);
         }
@@ -3100,6 +3311,9 @@ static void DestroyVulkanAssets(void)
     }
     if (s_hostVertexUniformMemory != VK_NULL_HANDLE) {
         vkFreeMemory(s_specDevice, s_hostVertexUniformMemory, NULL);
+    }
+    if (s_msaaImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(s_specDevice, s_msaaImageMemory, NULL);
     }
     if (s_depthResource.image_view != VK_NULL_HANDLE) {
         vkDestroyImageView(s_specDevice, s_depthResource.image_view, NULL);
