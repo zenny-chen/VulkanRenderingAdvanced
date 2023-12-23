@@ -139,7 +139,10 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="GeometryShader.c" />
     <ClCompile Include="main.c" />
+    <ClCompile Include="MeshShader.c" />
+    <ClCompile Include="texturing.c" />
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\basic_ms.frag.glsl" />
@@ -155,6 +158,11 @@
     <None Include="shaders\glsl_builder.bat" />
     <None Include="shaders\gradient.frag.glsl" />
     <None Include="shaders\gradient.vert.glsl" />
+    <None Include="shaders\texture.frag.glsl" />
+    <None Include="shaders\texture.vert.glsl" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="common.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
