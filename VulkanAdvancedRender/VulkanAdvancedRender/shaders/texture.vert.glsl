@@ -4,7 +4,7 @@
 #extension GL_EXT_scalar_block_layout : enable
 
 layout(location = 0) in vec4 inPos;
-layout(location = 1) in vec2 inTexCoords;
+layout(location = 2) in vec2 inTexCoords;
 layout(location = 0) out vec2 varyingTexCoords;
 
 layout(std430, set = 0, binding = 0, scalar) uniform transform_block {
