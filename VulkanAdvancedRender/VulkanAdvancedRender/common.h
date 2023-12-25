@@ -32,6 +32,22 @@ static inline FILE* GeneralOpenFile(const char* path)
 #define _USE_MATH_DEFINES
 
 #else
+#include <unistd.h>
+#include <sys/types.h>
+
+#define sprintf_s(buffer, bufferMaxCount, format, ...)      sprintf((buffer), (format), ## __VA_ARGS__)
+
+static inline int strcpy_s(char* dst, size_t maxSizeInDst, const char* src)
+{
+    strcpy(dst, src);
+    return 0;
+}
+
+static inline int strcat_s(char* dst, size_t maxSizeInDst, const char* src)
+{
+    strcat(dst, src);
+    return 0;
+}
 
 static inline FILE* GeneralOpenFile(const char* path)
 {
@@ -47,6 +63,8 @@ static inline FILE* GeneralOpenFile(const char* path)
 #endif // _WIN32
 
 #include <math.h>
+
+#define USE_MSAA_SAMPLE_COUNT       0
 
 enum
 {

@@ -17,7 +17,7 @@ enum MY_CONSTANTS
     WINDOW_HEIGHT = 640,
     FRAME_LAG = 2,
 
-    s_depth_format = VK_FORMAT_D16_UNORM,
+    s_depth_format = VK_FORMAT_D32_SFLOAT,
 
     FLATTEN_PIPELINE_INDEX = 0,
     GRAIENT_PIPELINE_INDEX,
@@ -34,9 +34,11 @@ enum MY_CONSTANTS
 typedef struct SwapchainImageResources
 {
     VkImage image;
+    VkImageView view;
+    VkImage msaaImage;          // MSAA image for render target (framebuffer)
+    VkImageView msaaView;       // MSAA image view for render target (framebuffer)
     VkCommandBuffer cmd_buf;
     VkCommandBuffer graphics_to_present_cmd_buf;
-    VkImageView view;
     VkFramebuffer framebuffer;
 } SwapchainImageResources;
 
@@ -81,6 +83,7 @@ static VkQueryPool s_timestampQueryPool = VK_NULL_HANDLE;
 static VkQueryPool s_occlusionQueryPool = VK_NULL_HANDLE;
 static VkBuffer s_hostVertexAndUniformBuffer = VK_NULL_HANDLE;
 static VkDeviceMemory s_hostVertexUniformMemory = VK_NULL_HANDLE;
+static VkDeviceMemory s_msaaColorImageMemory = VK_NULL_HANDLE;
 static VkDescriptorSetLayout s_descSetLayout = VK_NULL_HANDLE;
 static VkPipelineLayout s_pipelineLayout = VK_NULL_HANDLE;
 static VkRenderPass s_render_pass = VK_NULL_HANDLE;
@@ -132,8 +135,11 @@ static uint64_t s_currOcclusionCount = 0;
 static struct
 {
     VkImage image;
-    VkDeviceMemory device_memory;
     VkImageView image_view;
+    VkImage msaaImage;
+    VkImageView msaaView;
+    VkDeviceMemory device_memory;
+    VkDeviceMemory msaaDeviceMemory;
 } s_depthResource;
 
 static const char* const s_deviceTypes[] = {
@@ -385,6 +391,42 @@ static bool InitializeVulkanInstance(const char *appName, const char *engineName
     return result == VK_SUCCESS;
 }
 
+static void ParseDepthStencilResolveModes(char dstBuffer[], size_t bufferSize, VkResolveModeFlags flags)
+{
+    if (flags == VK_RESOLVE_MODE_NONE)
+    {
+        strcpy_s(dstBuffer, bufferSize, "None");
+        return;
+    }
+
+    bool hasItem = false;
+    if ((flags & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT) != 0)
+    {
+        strcat_s(dstBuffer, bufferSize, "Sample Zero");
+        hasItem = true;
+    }
+    if ((flags & VK_RESOLVE_MODE_AVERAGE_BIT) != 0)
+    {
+        strcat_s(dstBuffer, bufferSize, hasItem ? " | Average" : "Average");
+        hasItem = true;
+    }
+    if ((flags & VK_RESOLVE_MODE_MIN_BIT) != 0)
+    {
+        strcat_s(dstBuffer, bufferSize, hasItem ? " | Min" : "Min");
+        hasItem = true;
+    }
+    if ((flags & VK_RESOLVE_MODE_MAX_BIT) != 0)
+    {
+        strcat_s(dstBuffer, bufferSize, hasItem ? " | Max" : "Max");
+        hasItem = true;
+    }
+    if ((flags & VK_RESOLVE_MODE_EXTERNAL_FORMAT_DOWNSAMPLE_ANDROID) != 0)
+    {
+        strcat_s(dstBuffer, bufferSize, hasItem ? " | External Format Downsample Android" : "External Format Downsample Android");
+        hasItem = true;
+    }
+}
+
 // Return the queue family count
 static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
 {
@@ -481,6 +523,8 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
     bool supportDriverProperties = false;
     bool supportSPIRV1_4 = false;
     bool supportMeshShader = false;
+    bool supportDepthStencilResolve = false;
+    bool supportCreateRenderPass2 = false;
 
     for (uint32_t i = 0; i < extPropCount; ++i)
     {
@@ -525,6 +569,18 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
         if (strcmp(currExtName, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME) == 0)
         {
             s_supportFragmentShadingRate = true;
+            availExtensionNames[availExtensionCount++] = currExtName;
+            continue;
+        }
+        if (strcmp(currExtName, VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME) == 0)
+        {
+            supportDepthStencilResolve = true;
+            availExtensionNames[availExtensionCount++] = currExtName;
+            continue;
+        }
+        if (strcmp(currExtName, VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME) == 0)
+        {
+            supportCreateRenderPass2 = true;
             availExtensionNames[availExtensionCount++] = currExtName;
             continue;
         }
@@ -573,7 +629,21 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
     printf("%s feature %s supported!\n", VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, notStr);
     notStr = "is";
 
+    if (!supportDepthStencilResolve) {
+        notStr = "not";
+    }
+    printf("%s feature %s supported!\n", VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME, notStr);
+    notStr = "is";
+
+    if (!supportCreateRenderPass2) {
+        notStr = "not";
+    }
+    printf("%s feature %s supported!\n", VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME, notStr);
+    notStr = "is";
+
     printf("Available required device extension count: %u\n\n", availExtensionCount);
+
+    char strBuffer[256] = { '\0' };
 
     // Query detail driver info
     VkPhysicalDeviceDriverProperties driverProps = {
@@ -592,10 +662,15 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
         .pNext = &meshShaderProps
     };
 
+    VkPhysicalDeviceDepthStencilResolvePropertiesKHR depthStencilResolveProperties = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES_KHR,
+        .pNext = &fragmentShadingRateProps
+    };
+
     VkPhysicalDeviceProperties2 properties2 = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
         // link to driverProps
-        .pNext = &fragmentShadingRateProps
+        .pNext = &depthStencilResolveProperties
     };
 
     // Query all above properties
@@ -659,6 +734,24 @@ static bool InitializeVulkanDevice(VkQueueFlagBits queueFlag)
         printf("support fragment shading rate with custom sample locations? %s\n", fragmentShadingRateProps.maxFragmentShadingRateCoverageSamples != VK_FALSE ? "YES" : "NO");
         printf("support fragment shading rate strict multipy combiner? %s\n", fragmentShadingRateProps.fragmentShadingRateStrictMultiplyCombiner != VK_FALSE ? "YES" : "NO");
     }
+    if (supportDepthStencilResolve)
+    {
+        ParseDepthStencilResolveModes(strBuffer, sizeof(strBuffer), depthStencilResolveProperties.supportedDepthResolveModes);
+        printf("support depth resolve modes: %s\n", strBuffer);
+
+        strBuffer[0] = '\0';
+        ParseDepthStencilResolveModes(strBuffer, sizeof(strBuffer), depthStencilResolveProperties.supportedStencilResolveModes);
+        printf("support stencil resolve modes: %s\n", strBuffer);
+
+        printf("support independent resolve None: %s\n", depthStencilResolveProperties.independentResolveNone != VK_FALSE ? "YES" : "NO");
+        printf("Support independent resolve: %s\n", depthStencilResolveProperties.independentResolve != VK_FALSE ? "YES" : "NO");
+    }
+
+#if USE_MSAA_SAMPLE_COUNT > 0
+    if (!supportDepthStencilResolve) {
+        fprintf(stderr, "WARNING: Current device does not support either VK_KHR_depth_stencil_resolve or VK_KHR_create_renderpass2!");
+    }
+#endif
 
     s_gpuTimestampPeriod = properties2.properties.limits.timestampPeriod;
 
@@ -940,6 +1033,52 @@ static bool CreateVulkanSwapchain(void)
         s_surfaceFormat = surfaceFormats[0];
     }
 
+    const char* currSurfaceFormatStr = "Unknown";
+    switch (s_surfaceFormat.format)
+    {
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+        currSurfaceFormatStr = "VK_FORMAT_R16G16B16A16_SFLOAT";
+        break;
+
+    case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+        currSurfaceFormatStr = "VK_FORMAT_A2B10G10R10_UNORM_PACK32";
+        break;
+
+    case VK_FORMAT_R8G8B8A8_SRGB:
+        currSurfaceFormatStr = "VK_FORMAT_R8G8B8A8_SRGB";
+        break;
+
+    case VK_FORMAT_B8G8R8A8_SRGB:
+        currSurfaceFormatStr = "VK_FORMAT_B8G8R8A8_SRGB";
+        break;
+
+    case VK_FORMAT_R8G8B8A8_UNORM:
+        currSurfaceFormatStr = "VK_FORMAT_R8G8B8A8_UNORM";
+        break;
+
+    case VK_FORMAT_B8G8R8A8_UNORM:
+        currSurfaceFormatStr = "VK_FORMAT_B8G8R8A8_UNORM";
+        break;
+
+    default:
+        break;
+    }
+
+    printf("Current found preferred surface format: %s\n", currSurfaceFormatStr);
+
+    VkImageFormatProperties imageFormatProperties = { 0 };
+    res = vkGetPhysicalDeviceImageFormatProperties(s_currPhysicalDevice, s_surfaceFormat.format, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT, &imageFormatProperties);
+    if (res != VK_SUCCESS)
+    {
+        fprintf(stderr, "vkGetPhysicalDeviceImageFormatProperties failed: %d\n", res);
+        return false;
+    }
+
+    printf("Current surface format properties: maxExtent: %ux%ux%u, maxMipLevels: %u, maxArrayLayers: %u, sampleCounts: 0x%02X, maxResourceSize: %zu\n",
+        imageFormatProperties.maxExtent.width, imageFormatProperties.maxExtent.height, imageFormatProperties.maxExtent.depth, imageFormatProperties.maxMipLevels,
+        imageFormatProperties.maxArrayLayers, imageFormatProperties.sampleCounts, imageFormatProperties.maxResourceSize);
+
     VkExtent2D swapchainExtent;
     // width and height are either both 0xFFFFFFFF, or both not 0xFFFFFFFF.
     if (surfCapabilities.currentExtent.width == 0xffffffffU || surfCapabilities.currentExtent.height == 0xffffffffU)
@@ -1121,6 +1260,112 @@ static bool CreateVulkanSwapchain(void)
         return false;
     }
 
+#if USE_MSAA_SAMPLE_COUNT > 0
+    const VkImageCreateInfo msaaImageCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = s_surfaceFormat.format,
+        .extent = { swapchainExtent.width, swapchainExtent.height, 1U },
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = (VkSampleCountFlagBits)USE_MSAA_SAMPLE_COUNT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = (VkImageUsageFlagBits)(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT),
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 1,
+        .pQueueFamilyIndices = (uint32_t[]){ graphicsQueueFamilyIndex },
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+    };
+
+    res = vkCreateImage(s_specDevice, &msaaImageCreateInfo, NULL, &s_swapchainImageResources[0].msaaImage);
+    if (res != VK_SUCCESS)
+    {
+        fprintf(stderr, "vkCreateImage for texture faild: %d\n", res);
+        return false;
+    }
+
+    VkPhysicalDeviceMemoryProperties memoryProperties = { 0 };
+    vkGetPhysicalDeviceMemoryProperties(s_currPhysicalDevice, &memoryProperties);
+
+    VkMemoryRequirements memoryRequirements = { 0 };
+    vkGetImageMemoryRequirements(s_specDevice, s_swapchainImageResources[0].msaaImage, &memoryRequirements);
+    const VkDeviceSize alignmentMask = memoryRequirements.alignment - 1U;
+    const VkDeviceSize msaaImageBufferSize = (memoryRequirements.size + alignmentMask) & ~alignmentMask;
+    memoryRequirements.size = msaaImageBufferSize * s_swapchainImageCount;
+
+    // Find host visible property memory type index
+    uint32_t memoryTypeIndex;
+    for (memoryTypeIndex = 0; memoryTypeIndex < memoryProperties.memoryTypeCount; ++memoryTypeIndex)
+    {
+        if ((memoryRequirements.memoryTypeBits & (1U << memoryTypeIndex)) == 0U) {
+            continue;
+        }
+        const VkMemoryType memoryType = memoryProperties.memoryTypes[memoryTypeIndex];
+        if ((memoryType.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 &&
+            // We prefer using this bit to back an image with VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT usage.
+            (memoryType.propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0 &&
+            memoryProperties.memoryHeaps[memoryType.heapIndex].size >= memoryRequirements.size) {
+            // found our memory type!
+            break;
+        }
+    }
+    if (memoryTypeIndex == memoryProperties.memoryTypeCount)
+    {
+        // Not found preferred memory type!
+        // Try the secondary memory type...
+        for (memoryTypeIndex = 0; memoryTypeIndex < memoryProperties.memoryTypeCount; ++memoryTypeIndex)
+        {
+            if ((memoryRequirements.memoryTypeBits & (1U << memoryTypeIndex)) == 0U) {
+                continue;
+            }
+            const VkMemoryType memoryType = memoryProperties.memoryTypes[memoryTypeIndex];
+            if ((memoryType.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 &&
+                memoryProperties.memoryHeaps[memoryType.heapIndex].size >= memoryRequirements.size) {
+                // found our memory type!
+                break;
+            }
+        }
+    }
+
+    const VkMemoryAllocateInfo memAllocInfo = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = NULL,
+        .allocationSize = memoryRequirements.size,
+        .memoryTypeIndex = memoryTypeIndex
+    };
+
+    res = vkAllocateMemory(s_specDevice, &memAllocInfo, NULL, &s_msaaColorImageMemory);
+    if (res != VK_SUCCESS)
+    {
+        fprintf(stderr, "vkAllocateMemory for texture failed: %d\n", res);
+        return false;
+    }
+
+    VkImageViewCreateInfo msaaImageViewCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .image = VK_NULL_HANDLE,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = s_surfaceFormat.format,
+        .components = {
+            .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .a = VK_COMPONENT_SWIZZLE_IDENTITY
+        },
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0U,
+            .levelCount = 1U,
+            .baseArrayLayer = 0U,
+            .layerCount = 1U
+        }
+    };
+#endif // USE_MSAA
+
     for (uint32_t i = 0; i < s_swapchainImageCount; i++)
     {
         const VkImageViewCreateInfo swapchainImageView = {
@@ -1149,6 +1394,33 @@ static bool CreateVulkanSwapchain(void)
         }
 
         s_swapchainImageResources[i].image = swapchainImages[i];
+
+#if USE_MSAA_SAMPLE_COUNT > 0
+        if (i > 0U)
+        {
+            res = vkCreateImage(s_specDevice, &msaaImageCreateInfo, NULL, &s_swapchainImageResources[i].msaaImage);
+            if (res != VK_SUCCESS)
+            {
+                fprintf(stderr, "vkCreateImage for MSAA image faild: %d\n", res);
+                return false;
+            }
+        }
+
+        res = vkBindImageMemory(s_specDevice, s_swapchainImageResources[i].msaaImage, s_msaaColorImageMemory, i * msaaImageBufferSize);
+        if (res != VK_SUCCESS)
+        {
+            fprintf(stderr, "vkBindImageMemory for MSAA image failed: %d\n", res);
+            break;
+        }
+
+        msaaImageViewCreateInfo.image = s_swapchainImageResources[i].msaaImage;
+        res = vkCreateImageView(s_specDevice, &msaaImageViewCreateInfo, NULL, &s_swapchainImageResources[i].msaaView);
+        if (res != VK_SUCCESS)
+        {
+            fprintf(stderr, "vkCreateImageView for MSAA image view failed: %d\n", res);
+            break;
+        }
+#endif
     }
 
     return true;
@@ -1512,7 +1784,9 @@ static bool CreateVertexAndUniformBuffersAndMemories(void)
 
     VkMemoryRequirements deviceVertexMemoryRequirements = { 0 };
     vkGetBufferMemoryRequirements(s_specDevice, s_vertexCoordsBuffer, &deviceVertexMemoryRequirements);
-    const size_t totalDeviceVertexBufferSize = deviceVertexMemoryRequirements.size * 3;
+    const VkDeviceSize alignedSizeMask = deviceVertexMemoryRequirements.alignment - 1U;
+    const VkDeviceSize vertexBufferMemorySize = (deviceVertexMemoryRequirements.size + alignedSizeMask) & ~alignedSizeMask;
+    const VkDeviceSize totalDeviceVertexBufferSize = vertexBufferMemorySize * 3;
 
     // Find host visible property memory type index
     for (memoryTypeIndex = 0; memoryTypeIndex < memoryProperties.memoryTypeCount; ++memoryTypeIndex)
@@ -1542,21 +1816,21 @@ static bool CreateVertexAndUniformBuffersAndMemories(void)
         return false;
     }
 
-    res = vkBindBufferMemory(s_specDevice, s_vertexCoordsBuffer, s_vertexMemory, 0);
+    res = vkBindBufferMemory(s_specDevice, s_vertexCoordsBuffer, s_vertexMemory, 0U);
     if (res != VK_SUCCESS)
     {
         fprintf(stderr, "vkBindBufferMemory for vertex coords buffer failed: %d\n", res);
         return false;
     }
 
-    res = vkBindBufferMemory(s_specDevice, s_textureCoordsBuffer, s_vertexMemory, sizeof(s_vertex_coords_data));
+    res = vkBindBufferMemory(s_specDevice, s_textureCoordsBuffer, s_vertexMemory, vertexBufferMemorySize);
     if (res != VK_SUCCESS)
     {
         fprintf(stderr, "vkBindBufferMemory for texture coords buffer failed: %d\n", res);
         return false;
     }
 
-    res = vkBindBufferMemory(s_specDevice, s_colorBuffer, s_vertexMemory, sizeof(s_vertex_coords_data) + sizeof(s_texture_coords_data));
+    res = vkBindBufferMemory(s_specDevice, s_colorBuffer, s_vertexMemory, vertexBufferMemorySize * 2U);
     if (res != VK_SUCCESS)
     {
         fprintf(stderr, "vkBindBufferMemory for color buffer failed: %d\n", res);
@@ -1691,6 +1965,9 @@ static void CopyFromHostToDeviceBuffersAndSync(void)
 
 static bool CreateDepthReource(void)
 {
+    VkPhysicalDeviceMemoryProperties memoryProperties = { 0 };
+    vkGetPhysicalDeviceMemoryProperties(s_currPhysicalDevice, &memoryProperties);
+
     const VkImageCreateInfo imageCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .pNext = NULL,
@@ -1719,9 +1996,6 @@ static bool CreateDepthReource(void)
     VkMemoryRequirements memoryRequirements = { 0 };
     vkGetImageMemoryRequirements(s_specDevice, s_depthResource.image, &memoryRequirements);
 
-    VkPhysicalDeviceMemoryProperties memoryProperties = { 0 };
-    vkGetPhysicalDeviceMemoryProperties(s_currPhysicalDevice, &memoryProperties);
-
     uint32_t memoryTypeIndex;
     // Find host visible property memory type index
     for (memoryTypeIndex = 0; memoryTypeIndex < memoryProperties.memoryTypeCount; ++memoryTypeIndex)
@@ -1734,7 +2008,6 @@ static bool CreateDepthReource(void)
             memoryProperties.memoryHeaps[memoryType.heapIndex].size >= memoryRequirements.size)
         {
             // found our memory type!
-            printf("Device local memory size: %zuMB\n", memoryProperties.memoryHeaps[memoryType.heapIndex].size / (1024 * 1024));
             break;
         }
     }
@@ -1788,6 +2061,119 @@ static bool CreateDepthReource(void)
         fprintf(stderr, "vkCreateImageView for depth failed: %d\n", res);
         return false;
     }
+
+#if USE_MSAA_SAMPLE_COUNT > 0
+    const VkImageCreateInfo msaaImageCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = s_depth_format,
+            .extent = { s_render_width, s_render_height, 1 },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = (VkSampleCountFlagBits)USE_MSAA_SAMPLE_COUNT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 1,
+            .pQueueFamilyIndices = &s_graphicsQueueFamilyIndex,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+    };
+
+    res = vkCreateImage(s_specDevice, &msaaImageCreateInfo, NULL, &s_depthResource.msaaImage);
+    if (res != VK_SUCCESS)
+    {
+        fprintf(stderr, "vkCreateImage for MSAA depth faild: %d\n", res);
+        return false;
+    }
+
+    vkGetImageMemoryRequirements(s_specDevice, s_depthResource.msaaImage, &memoryRequirements);
+
+    for (memoryTypeIndex = 0; memoryTypeIndex < memoryProperties.memoryTypeCount; ++memoryTypeIndex)
+    {
+        if ((memoryRequirements.memoryTypeBits & (1U << memoryTypeIndex)) == 0U) {
+            continue;
+        }
+        const VkMemoryType memoryType = memoryProperties.memoryTypes[memoryTypeIndex];
+        if ((memoryType.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 &&
+            // We prefer using this bit to back an image with VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT usage.
+            (memoryType.propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) != 0 &&
+            memoryProperties.memoryHeaps[memoryType.heapIndex].size >= memoryRequirements.size)
+        {
+            // found our memory type!
+            break;
+        }
+    }
+    if (memoryTypeIndex == memoryProperties.memoryTypeCount)
+    {
+        // Not found preferred memory type!
+        // Try the secondary memory type...
+        for (memoryTypeIndex = 0; memoryTypeIndex < memoryProperties.memoryTypeCount; ++memoryTypeIndex)
+        {
+            if ((memoryRequirements.memoryTypeBits & (1U << memoryTypeIndex)) == 0U) {
+                continue;
+            }
+            const VkMemoryType memoryType = memoryProperties.memoryTypes[memoryTypeIndex];
+            if ((memoryType.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 &&
+                memoryProperties.memoryHeaps[memoryType.heapIndex].size >= memoryRequirements.size)
+            {
+                // found our memory type!
+                break;
+            }
+        }
+    }
+
+    const VkMemoryAllocateInfo msaaMemAllocInfo = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = NULL,
+        .allocationSize = memoryRequirements.size,
+        .memoryTypeIndex = memoryTypeIndex
+    };
+
+    res = vkAllocateMemory(s_specDevice, &msaaMemAllocInfo, NULL, &s_depthResource.msaaDeviceMemory);
+    if (res != VK_SUCCESS)
+    {
+        fprintf(stderr, "vkAllocateMemory for MSAA depth failed: %d\n", res);
+        return false;
+    }
+
+    res = vkBindImageMemory(s_specDevice, s_depthResource.msaaImage, s_depthResource.msaaDeviceMemory, 0U);
+    if (res != VK_SUCCESS)
+    {
+        fprintf(stderr, "vkBindImageMemory for depth failed: %d\n", res);
+        return false;
+    }
+
+    const VkImageViewCreateInfo msaaImageViewCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .image = s_depthResource.msaaImage,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = s_depth_format,
+        .components = {
+            .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .a = VK_COMPONENT_SWIZZLE_IDENTITY
+        },
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+
+    res = vkCreateImageView(s_specDevice, &msaaImageViewCreateInfo, NULL, &s_depthResource.msaaView);
+    if (res != VK_SUCCESS)
+    {
+        fprintf(stderr, "vkCreateImageView for MSAA depth failed: %d\n", res);
+        return false;
+    }
+#endif
 
     return true;
 }
@@ -1855,6 +2241,171 @@ static bool CreateRenderPass(void)
     // the renderpass, the color attachment's layout will be transitioned to
     // LAYOUT_PRESENT_SRC_KHR to be ready to present.  This is all done as part of
     // the renderpass, no barriers are necessary.
+#if USE_MSAA_SAMPLE_COUNT > 0
+    const VkAttachmentDescription2KHR attachments[] = {
+        // MSAA color attachment
+        {
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2_KHR,
+            .pNext = NULL,
+            .flags = 0,
+            .format = s_surfaceFormat.format,
+            .samples = (VkSampleCountFlagBits)USE_MSAA_SAMPLE_COUNT,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+        },
+        // MSAA depth attachment
+        {
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2_KHR,
+            .pNext = NULL,
+            .flags = 0,
+            .format = s_depth_format,
+            .flags = 0,
+            .samples = (VkSampleCountFlagBits)USE_MSAA_SAMPLE_COUNT,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        },
+        // color resolved attachment
+        {
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2_KHR,
+            .pNext = NULL,
+            .flags = 0,
+            .flags = 0,
+            .format = s_surfaceFormat.format,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+        },
+        // depth resolved attachment
+        {
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2_KHR,
+            .pNext = NULL,
+            .flags = 0,
+            .flags = 0,
+            .format = s_depth_format,
+            .flags = 0,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        }
+    };
+
+    const VkAttachmentReference2 color_reference = {
+        .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2_KHR,
+        .pNext = NULL,
+        .attachment = 0,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+    };
+    const VkAttachmentReference2 depth_reference = {
+        .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2_KHR,
+        .pNext = NULL,
+        .attachment = 1,
+        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+    };
+    const VkAttachmentReference2 color_resolved_reference = {
+        .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2_KHR,
+        .pNext = NULL,
+        .attachment = 2,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+    };
+    const VkAttachmentReference2 depth_resolved_reference = {
+        .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2_KHR,
+        .pNext = NULL,
+        .attachment = 3,
+        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+    };
+
+    const VkSubpassDescriptionDepthStencilResolveKHR depthStencilResolve = {
+        .sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_DEPTH_STENCIL_RESOLVE_KHR,
+        .pNext = NULL,
+        .depthResolveMode = VK_RESOLVE_MODE_AVERAGE_BIT_KHR,
+        .stencilResolveMode = VK_RESOLVE_MODE_NONE,
+        .pDepthStencilResolveAttachment = &depth_resolved_reference
+    };
+
+    const VkSubpassDescription2KHR subpasses[1] = {
+        {
+            .sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2_KHR,
+            .pNext = &depthStencilResolve,
+            .flags = 0,
+            .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+            .inputAttachmentCount = 0,
+            .pInputAttachments = NULL,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &color_reference,
+            .pResolveAttachments = &color_resolved_reference,
+            .pDepthStencilAttachment = &depth_reference,
+            .preserveAttachmentCount = 0,
+            .pPreserveAttachments = NULL,
+        }
+    };
+
+    VkSubpassDependency2KHR attachmentDependencies[] = {
+        // Depth buffer is shared between swapchain images
+        {
+            .sType = VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2_KHR,
+            .pNext = NULL,
+            .srcSubpass = VK_SUBPASS_EXTERNAL,
+            .dstSubpass = 0,
+            .srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            .srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .dependencyFlags = 0,
+            .viewOffset = 0
+        },
+        // Image Layout Transition
+        {
+            .sType = VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2_KHR,
+            .pNext = NULL,
+            .srcSubpass = VK_SUBPASS_EXTERNAL,
+            .dstSubpass = 0,
+            .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .srcAccessMask = VK_ACCESS_NONE,
+            .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
+            .dependencyFlags = 0,
+            .viewOffset = 0
+        }
+    };
+
+    const VkRenderPassCreateInfo2KHR renderPassCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2_KHR,
+        .pNext = NULL,
+        .flags = 0,
+        .attachmentCount = (uint32_t)(sizeof(attachments) / sizeof(attachments[0])),
+        .pAttachments = attachments,
+        .subpassCount = (uint32_t)(sizeof(subpasses) / sizeof(subpasses[0])),
+        .pSubpasses = subpasses,
+        .dependencyCount = (uint32_t)(sizeof(attachmentDependencies) / sizeof(attachmentDependencies[0])),
+        .pDependencies = attachmentDependencies,
+        .correlatedViewMaskCount = 0U,
+        .pCorrelatedViewMasks = NULL
+    };
+
+    VkResult res = vkCreateRenderPass2(s_specDevice, &renderPassCreateInfo, NULL, &s_render_pass);
+    if (res != VK_SUCCESS)
+    {
+        fprintf(stderr, "vkCreateRenderPass failed: %d\n", res);
+        return false;
+    }
+
+#else
     const VkAttachmentDescription attachments[] = {
         // color attachment
         {
@@ -1866,7 +2417,7 @@ static bool CreateRenderPass(void)
             .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
             .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
         },
         // depth attachment
         {
@@ -1878,17 +2429,19 @@ static bool CreateRenderPass(void)
             .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
             .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
         }
     };
+
     const VkAttachmentReference color_reference = {
         .attachment = 0,
-        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
     };
     const VkAttachmentReference depth_reference = {
         .attachment = 1,
-        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
     };
+
     const VkSubpassDescription subpasses[1] = {
         {
             .flags = 0,
@@ -1900,7 +2453,7 @@ static bool CreateRenderPass(void)
             .pResolveAttachments = NULL,
             .pDepthStencilAttachment = &depth_reference,
             .preserveAttachmentCount = 0,
-            .pPreserveAttachments = NULL,
+            .pPreserveAttachments = NULL
         }
     };
 
@@ -1921,9 +2474,9 @@ static bool CreateRenderPass(void)
             .dstSubpass = 0,
             .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
             .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .srcAccessMask = 0,
+            .srcAccessMask = VK_ACCESS_NONE,
             .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
-            .dependencyFlags = 0,
+            .dependencyFlags = 0
         },
     };
 
@@ -1936,7 +2489,7 @@ static bool CreateRenderPass(void)
         .subpassCount = (uint32_t)(sizeof(subpasses) / sizeof(subpasses[0])),
         .pSubpasses = subpasses,
         .dependencyCount = (uint32_t)(sizeof(attachmentDependencies) / sizeof(attachmentDependencies[0])),
-        .pDependencies = attachmentDependencies,
+        .pDependencies = attachmentDependencies
     };
 
     VkResult res = vkCreateRenderPass(s_specDevice, &renderPassCreateInfo, NULL, &s_render_pass);
@@ -1945,6 +2498,7 @@ static bool CreateRenderPass(void)
         fprintf(stderr, "vkCreateRenderPass failed: %d\n", res);
         return false;
     }
+#endif
 
     return true;
 }
@@ -2100,7 +2654,7 @@ static bool CreateGraphicsPipeline(const char* vertSPVFilePath, const char* frag
             .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
             .pNext = NULL,
             .flags = 0,
-            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+            .rasterizationSamples = USE_MSAA_SAMPLE_COUNT > 0 ? (VkSampleCountFlagBits)(USE_MSAA_SAMPLE_COUNT) : VK_SAMPLE_COUNT_1_BIT,
             .sampleShadingEnable = VK_FALSE,
             .minSampleShading = 0.0f,
             .pSampleMask = NULL,
@@ -2168,7 +2722,10 @@ static bool CreateGraphicsPipeline(const char* vertSPVFilePath, const char* frag
         const VkPipelineFragmentShadingRateStateCreateInfoKHR fragmentShadingRateStateCreateInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR,
             .pNext = NULL,
-            .fragmentSize = { .width = 1, .height = 4 },
+            .fragmentSize = {
+                .width = USE_MSAA_SAMPLE_COUNT > 0 ? 2U : 1U,
+                .height = USE_MSAA_SAMPLE_COUNT > 0 ? 2U : 4U
+            },
             .combinerOps = { [0] = VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR, [1] = VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR }
         };
 
@@ -2324,7 +2881,13 @@ static bool CreateDescriptorPoolAndSet(void)
 
 static bool CreateFramebuffers(void)
 {
+#if USE_MSAA_SAMPLE_COUNT > 0
+    // This `attachments` MUST BE coherent with the one in renderpass creation.
+    VkImageView attachments[] = { VK_NULL_HANDLE, s_depthResource.msaaView, VK_NULL_HANDLE, s_depthResource.image_view };
+#else
+    // This `attachments` MUST BE coherent with the one in renderpass creation.
     VkImageView attachments[] = { VK_NULL_HANDLE, s_depthResource.image_view };
+#endif
 
     const VkFramebufferCreateInfo framebufferCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
@@ -2339,7 +2902,12 @@ static bool CreateFramebuffers(void)
 
     for (uint32_t i = 0; i < s_swapchainImageCount; ++i)
     {
+#if USE_MSAA_SAMPLE_COUNT > 0
+        attachments[0] = s_swapchainImageResources[i].msaaView;
+        attachments[2] = s_swapchainImageResources[i].view;
+#else
         attachments[0] = s_swapchainImageResources[i].view;
+#endif
         VkResult res = vkCreateFramebuffer(s_specDevice, &framebufferCreateInfo, NULL, &s_swapchainImageResources[i].framebuffer);
         if (res != VK_SUCCESS)
         {
@@ -2373,9 +2941,17 @@ static bool RecordCommandsForDraw(VkCommandBuffer inputCmdBuf, uint32_t swapchai
     // Begin the timestamp query
     vkCmdWriteTimestamp(inputCmdBuf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, s_timestampQueryPool, swapchainIndex * 2);
 
+    // This `clearValues` MUST BE coherent with the attachments in renderpass creation.
     const VkClearValue clearValues[] = {
         { .color.float32 = { 0.4f, 0.5f, 0.4f, 1.0f } },
-        { .depthStencil = { .depth = 1.0f, .stencil = 0 } },
+        { .depthStencil = { .depth = 1.0f, .stencil = 0 } }
+#if USE_MSAA_SAMPLE_COUNT > 0
+        //,
+        // attachment[2], i.e. color resolve is VK_ATTACHMENT_LOAD_OP_DONT_CARE
+        //{.color.float32 = { 0.4f, 0.5f, 0.4f, 1.0f } },
+        // attachment[3], i.e. depth resolve is VK_ATTACHMENT_LOAD_OP_DONT_CARE
+        //{.depthStencil = {.depth = 1.0f, .stencil = 0 } }
+#endif
     };
     const VkRenderPassBeginInfo renderPassBeginInfo = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -2391,7 +2967,16 @@ static bool RecordCommandsForDraw(VkCommandBuffer inputCmdBuf, uint32_t swapchai
     };
 
     // ==== The following code block is in the render pass instance. ====
+#if USE_MSAA_SAMPLE_COUNT > 0
+    const VkSubpassBeginInfoKHR subpassBeginInfo = {
+        .sType = VK_STRUCTURE_TYPE_SUBPASS_BEGIN_INFO_KHR,
+        .pNext = NULL,
+        .contents = VK_SUBPASS_CONTENTS_INLINE
+    };
+    vkCmdBeginRenderPass2(inputCmdBuf, &renderPassBeginInfo, &subpassBeginInfo);
+#else
     vkCmdBeginRenderPass(inputCmdBuf, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+#endif
 
     const VkBuffer vertexBuffers[] = {
         s_vertexCoordsBuffer,       // VERTEX_BUFFER_LOCATION_INDEX
@@ -2450,7 +3035,15 @@ static bool RecordCommandsForDraw(VkCommandBuffer inputCmdBuf, uint32_t swapchai
 
     // Note that ending the renderpass changes the image's layout from
     // COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC_KHR
+#if USE_MSAA_SAMPLE_COUNT > 0
+    const VkSubpassEndInfoKHR subpassEndInfo = {
+        .sType = VK_STRUCTURE_TYPE_SUBPASS_END_INFO_KHR,
+        .pNext = NULL
+    };
+    vkCmdEndRenderPass2(inputCmdBuf, &subpassEndInfo);
+#else
     vkCmdEndRenderPass(inputCmdBuf);
+#endif
 
     if (IsSeperatePresentQueue())
     {
@@ -2880,9 +3473,18 @@ static void DestroyVulkanAssets(void)
         if (s_swapchainImageResources[i].view != VK_NULL_HANDLE) {
             vkDestroyImageView(s_specDevice, s_swapchainImageResources[i].view, NULL);
         }
+        if (s_swapchainImageResources[i].msaaImage != VK_NULL_HANDLE) {
+            vkDestroyImage(s_specDevice, s_swapchainImageResources[i].msaaImage, NULL);
+        }
+        if (s_swapchainImageResources[i].msaaView != VK_NULL_HANDLE) {
+            vkDestroyImageView(s_specDevice, s_swapchainImageResources[i].msaaView, NULL);
+        }
         if (s_swapchainImageResources[i].cmd_buf != VK_NULL_HANDLE) {
             vkFreeCommandBuffers(s_specDevice, s_commandPool, 1, &s_swapchainImageResources[i].cmd_buf);
         }
+    }
+    if (s_msaaColorImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(s_specDevice, s_msaaColorImageMemory, NULL);
     }
     if (s_uniformBuffer != VK_NULL_HANDLE) {
         vkDestroyBuffer(s_specDevice, s_uniformBuffer, NULL);
@@ -2932,8 +3534,17 @@ static void DestroyVulkanAssets(void)
     if (s_depthResource.image != VK_NULL_HANDLE) {
         vkDestroyImage(s_specDevice, s_depthResource.image, NULL);
     }
+    if (s_depthResource.msaaView != VK_NULL_HANDLE) {
+        vkDestroyImageView(s_specDevice, s_depthResource.msaaView, NULL);
+    }
+    if (s_depthResource.msaaImage != VK_NULL_HANDLE) {
+        vkDestroyImage(s_specDevice, s_depthResource.msaaImage, NULL);
+    }
     if (s_depthResource.device_memory != VK_NULL_HANDLE) {
         vkFreeMemory(s_specDevice, s_depthResource.device_memory, NULL);
+    }
+    if (s_depthResource.msaaDeviceMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(s_specDevice, s_depthResource.msaaDeviceMemory, NULL);
     }
     if (s_timestampQueryPool != VK_NULL_HANDLE) {
         vkDestroyQueryPool(s_specDevice, s_timestampQueryPool, NULL);

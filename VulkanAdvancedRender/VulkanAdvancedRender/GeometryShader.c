@@ -148,7 +148,7 @@ VkPipeline CreateGeometryShaderGraphicsPipeline(VkDevice specDevice, const char*
             .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
             .pNext = NULL,
             .flags = 0,
-            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+            .rasterizationSamples = USE_MSAA_SAMPLE_COUNT > 0 ? (VkSampleCountFlagBits)(USE_MSAA_SAMPLE_COUNT) : VK_SAMPLE_COUNT_1_BIT,
             .sampleShadingEnable = VK_FALSE,
             .minSampleShading = 0.0f,
             .pSampleMask = NULL,
