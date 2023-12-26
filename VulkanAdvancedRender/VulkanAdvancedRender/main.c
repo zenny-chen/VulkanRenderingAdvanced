@@ -2537,11 +2537,10 @@ bool CreateShaderModule(const char* fileName, VkShaderModule* pShaderModule)
     return res == VK_SUCCESS;
 }
 
-static bool CreateGraphicsPipeline(const char* vertSPVFilePath, const char* fragSPVFilePath, const char* geomSPVFilePath, int index)
+static bool CreateGraphicsPipeline(const char* vertSPVFilePath, const char* fragSPVFilePath, int index)
 {
     VkShaderModule vertexShaderModule = VK_NULL_HANDLE;
     VkShaderModule fragmentShaderModule = VK_NULL_HANDLE;
-    VkShaderModule geometryShaderModule = VK_NULL_HANDLE;
     VkResult res = VK_ERROR_INITIALIZATION_FAILED;
 
     do
@@ -2776,9 +2775,6 @@ static bool CreateGraphicsPipeline(const char* vertSPVFilePath, const char* frag
 
     if (vertexShaderModule != VK_NULL_HANDLE) {
         vkDestroyShaderModule(s_specDevice, vertexShaderModule, NULL);
-    }
-    if (geometryShaderModule != VK_NULL_HANDLE) {
-        vkDestroyShaderModule(s_specDevice, geometryShaderModule, NULL);
     }
     if (fragmentShaderModule != VK_NULL_HANDLE) {
         vkDestroyShaderModule(s_specDevice, fragmentShaderModule, NULL);
@@ -3754,8 +3750,8 @@ int main(int argc, const char* const argv[])
         
         const char* vsSPV = s_supportFragmentShadingRate ? "shaders/fsr.vert.spv" : "shaders/flatten.vert.spv";
         const char* fsSPV = s_supportFragmentShadingRate ? "shaders/fsr.frag.spv" : "shaders/flatten.frag.spv";
-        if (!CreateGraphicsPipeline(vsSPV, fsSPV, NULL, FLATTEN_PIPELINE_INDEX)) break;
-        if (!CreateGraphicsPipeline("shaders/gradient.vert.spv", "shaders/gradient.frag.spv", NULL, GRAIENT_PIPELINE_INDEX)) break;
+        if (!CreateGraphicsPipeline(vsSPV, fsSPV, FLATTEN_PIPELINE_INDEX)) break;
+        if (!CreateGraphicsPipeline("shaders/gradient.vert.spv", "shaders/gradient.frag.spv", GRAIENT_PIPELINE_INDEX)) break;
         s_pipelines[GEOMETRY_SHADER_PIPELINE_INDEX] = CreateGeometryShaderGraphicsPipeline(s_specDevice, "shaders/geomtest.vert.spv", "shaders/geomtest.frag.spv", "shaders/geomtest.geom.spv",
             s_pipelineLayout, s_render_pass, &s_pipelineCaches[GEOMETRY_SHADER_PIPELINE_INDEX]);
         if (s_pipelines[GEOMETRY_SHADER_PIPELINE_INDEX] == VK_NULL_HANDLE) break;
