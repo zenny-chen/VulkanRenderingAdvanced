@@ -940,7 +940,7 @@ static bool CreateVulkanSwapchain(void)
     // Generate error if could not find both a graphics and a present queue
     if (graphicsQueueFamilyIndex == UINT32_MAX || presentQueueFamilyIndex == UINT32_MAX)
     {
-        puts("Could not find both graphics and present queues!");
+        fprintf(stderr, "Could not find both graphics and present queues!\n");
         return false;
     }
 
