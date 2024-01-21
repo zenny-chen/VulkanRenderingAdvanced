@@ -38,7 +38,7 @@ void main()
     EmitVertex();
 
     // top-right
-    gl_Position = vec4(srcInPos.x + halfWidth, srcInPos.y - halfWidth, gl_Position.z, 1.0f);
+    gl_Position = vec4(srcInPos.x + halfWidth, srcInPos.y - halfWidth, srcInPos.z, 1.0f);
     gl_PointSize = pointSize;
     outFragColor = dstColor;
     EmitVertex();
